@@ -15,7 +15,7 @@ import os
 /// wins). While one Mac plays the other's sound, both Macs have one volume: the volume keys, Control
 /// Center or the menu on either Mac set it, mute included; each output also has its own share of it,
 /// set on its Mac. The other Mac's menu and media keys control the music: play/pause, tracks. Headphones as a Mac's output put it on standby (private
-/// listening). The capture runs only while some app plays sound, and for a while after, because
+/// listening). The microphone tune on either Mac aligns its outputs, then the other Mac, as heard there. The capture runs only while some app plays sound, and for a while after, because
 /// running audio keeps the Mac from sleeping.
 @MainActor @Observable
 final class Duet {
@@ -40,6 +40,9 @@ final class Duet {
     var volumes: [String: Double] { didSet { store.set(volumes, forKey: "volumes"); applyVolumes() } }
     /// Measured sync corrections (seconds) by device UID.
     private var lags: [String: Double] { didSet { store.set(lags, forKey: "lags") } }
+    /// Seconds this Mac's sound is heard later than its clock and devices say, measured by a tune
+    /// across both Macs (0 on at least one of them).
+    private var trim: Double { didSet { store.set(trim, forKey: "trim"); engine?.latencyTrim.value = Float(trim) } }
 
     var openAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
@@ -65,7 +68,7 @@ final class Duet {
 
     struct PeerState: Equatable {
         /// `stream`: the Bonjour name of its sound stream, empty while it sends none.
-        var on: Bool, since: Double, stream: String, playing: Bool, volume: Double, muted: Bool, canPlay: Bool, lead: Double
+        var on: Bool, since: Double, stream: String, playing: Bool, volume: Double, muted: Bool, canPlay: Bool, lead: Double, trim: Double
         init(_ m: [String: Any]) {
             on = m["on"] as? Bool ?? false
             since = m["since"] as? Double ?? 0
@@ -75,6 +78,7 @@ final class Duet {
             muted = m["muted"] as? Bool ?? false
             canPlay = m["canPlay"] as? Bool ?? false
             lead = m["lead"] as? Double ?? 0
+            trim = m["trim"] as? Double ?? 0
         }
     }
 
@@ -113,6 +117,8 @@ final class Duet {
     private let log = Logger(subsystem: "com.lacrearthur.duet", category: "audio")
     /// Logs the stream's health while this Mac plays the other Mac's sound.
     private var healthTimer: Timer?
+    /// Ends the pause of this Mac's music if the other Mac's tune never says it is done.
+    private var otherTuning: Timer?
     /// Keeps App Nap away from the stream threads while sound plays.
     private var activity: NSObjectProtocol? { didSet { if let oldValue { ProcessInfo.processInfo.endActivity(oldValue) } } }
 
@@ -128,6 +134,7 @@ final class Duet {
         chosenOutputs = Set(store.stringArray(forKey: "outputs") ?? ["BuiltInSpeakerDevice"])
         volumes = store.dictionary(forKey: "volumes") as? [String: Double] ?? [:]
         lags = store.dictionary(forKey: "lags") as? [String: Double] ?? [:]
+        trim = store.double(forKey: "trim")
         var id = store.string(forKey: "deviceID") ?? ""
         if id.isEmpty {
             id = UUID().uuidString
@@ -235,7 +242,7 @@ final class Duet {
         shareVolume()
         applyVolumes()
         updateNowPlaying()
-        sendState(canPlay: !isOn && !headphones && !devices.isEmpty, lead: localLead)
+        sendState(canPlay: !isOn && !headphones && !devices.isEmpty, lead: localLead + trim)
     }
 
     private func otherMacText(peer: PeerState?, session: Link.Session?) -> String {
@@ -281,6 +288,7 @@ final class Duet {
         }
         let engine = Engine(input: input, outputs: devices, delaySeconds: config.delay)
         for output in engine.outputs { output.lag.value = Float(lags[output.device.uid] ?? 0) }
+        engine.latencyTrim.value = Float(trim)
         do {
             try engine.start()
         } catch {
@@ -339,7 +347,7 @@ final class Duet {
         guard let session = link.session else { return sentState = nil }
         let state: [String: AnyHashable] = [
             "t": "state", "on": isOn, "since": since, "stream": sender?.name ?? "", "playing": monitor.isPlaying,
-            "volume": mainVolume, "muted": mainVolumeControl?.isMuted ?? false, "canPlay": canPlay, "lead": lead,
+            "volume": mainVolume, "muted": mainVolumeControl?.isMuted ?? false, "canPlay": canPlay, "lead": lead, "trim": trim,
         ]
         let id = ObjectIdentifier(session.crypto)
         guard sentState?.state != state || sentState?.session != id else { return }
@@ -358,6 +366,20 @@ final class Duet {
             guard isOn, let value = message["value"] as? Double else { break }
             mainVolume = max(0, min(1, value))
             if let muted = message["muted"] as? Bool { mainVolumeControl?.isMuted = muted }
+        case "tune":
+            // The other Mac tunes: if this Mac shares, its music pauses meanwhile (30 s at most).
+            let on = message["on"] as? Bool == true
+            otherTuning?.invalidate()
+            otherTuning = on ? Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { if self?.isOn == true { self?.engine?.mainGain.value = 1 } }
+            } : nil
+            if isOn { engine?.mainGain.value = on ? 0 : 1 }
+        case "click":
+            if isOn, let engine { engine.injectClick(atFrame: engine.ring.writeIndex + Int(0.05 * engine.sampleRate)) }
+        case "trim":
+            guard let value = message["value"] as? Double else { break }
+            trim = max(0, min(0.5, value))
+            update()
         default:
             break
         }
@@ -421,32 +443,63 @@ final class Duet {
     /// The main output's device applies this Mac's volume itself; the others get it as gain. The other
     /// Mac applies the same volume itself (see `shareVolume`).
     private func applyVolumes() {
-        guard let engine else { return }
+        guard let engine, !isTuning else { return }   // the tune sets every gain meanwhile
         let main = mainVolumeControl
         for (i, output) in engine.outputs.enumerated() {
             let uid = output.device.uid
             let own = Float(volume(uid))
             output.gain.value = chosenOutputs.contains(uid) ? own * own * (i == 0 ? 1 : main?.gain ?? 1) : 0
         }
-        // Silent there while tuning: the clicks are for this Mac's microphone.
-        sender?.gain.value = isTuning ? 0 : 1
+        sender?.gain.value = 1
     }
 
     // MARK: Sync tuning
 
-    /// Measures with the microphone when each output is heard and corrects it (music pauses ~2 s per output).
+    /// Measures with the microphone when each output, then the other Mac, is heard, and corrects them
+    /// (music pauses ~2 s per output). The other Mac is set to be heard together with this one here,
+    /// where the listener sits.
     func tuneSync() {
         guard !isTuning, let mic = builtInMicrophone() else { return }
         isTuning = true
         update()
         guard let engine else { isTuning = false; return update() }
+        let other = otherMacToTune(engine)
+        link.send(["t": "tune", "on": true])
         Task {
-            let results = await Task.detached { try? Calibration.run(engine, microphone: mic) }.value
+            let results = await Task.detached { try? Calibration.run(engine, microphone: mic, other: other) }.value
+            link.send(["t": "tune", "on": false])
             for output in engine.outputs.dropFirst() { lags[output.device.uid] = Double(output.lag.value) }
+            let main = results?.first?.delay
+            for r in results ?? [] {
+                log.notice("tune: \(r.output, privacy: .public) heard \(((r.delay ?? .nan) - (main ?? .nan)) * 1000, format: .fixed(precision: 1)) ms after the main output, strength \(r.strength, format: .fixed(precision: 0))")
+            }
+            if other != nil, let results, results.count > engine.outputs.count, let main, let heard = results.last?.delay {
+                // How much later the other Mac must be told its sound is heard than this Mac.
+                let later = (peer?.trim ?? 0) - trim + heard - main
+                trim = max(0, -later)
+                link.send(["t": "trim", "value": max(0, later)])
+            }
             isTuning = false
             update()
             let missed = results?.filter { $0.delay == nil }.map(\.output) ?? ["all outputs"]
             if !missed.isEmpty { status = "Not heard: " + ListFormatter.localizedString(byJoining: missed) }
+        }
+    }
+
+    /// The other Mac as one more output to tune, while both Macs play one stream.
+    private func otherMacToTune(_ engine: Engine) -> Calibration.OtherMac? {
+        guard let name = link.session?.peer.name else { return nil }
+        if let sender, peer?.canPlay == true {
+            // This Mac shares: its clicks reach the other Mac through the stream.
+            return Calibration.OtherMac(name: name, solo: { sender.gain.value = $0 ? 1 : 0 }) {
+                engine.injectClick(atFrame: engine.ring.writeIndex + Int(0.05 * engine.sampleRate))
+            }
+        }
+        guard isReceiving else { return nil }
+        // The other Mac shares: it clicks when asked, and its clicks come here in its stream.
+        let link = link
+        return Calibration.OtherMac(name: name, solo: { engine.mainGain.value = $0 ? 1 : 0 }) {
+            DispatchQueue.main.async { MainActor.assumeIsolated { link.send(["t": "click"]) } }
         }
     }
 }

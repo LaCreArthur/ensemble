@@ -45,7 +45,7 @@ enum StreamPacket {
 /// Sends the captured sound of `engine` to the receiver, on each route the receiver reaches it by.
 /// A route carries sound once it brought an authentic clock request, and until none came for 1 s.
 public final class StreamSender: @unchecked Sendable {
-    /// Gain the receiver applies (the main volume), linear.
+    /// Gain the receiver applies, linear: 0 silences the other Mac while this Mac tunes.
     public let gain = AtomicFloat(1)
     public let streamID = UInt32.random(in: 1...UInt32.max)
     /// The stream's Bonjour name, which the receiver looks for.
