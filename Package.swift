@@ -8,13 +8,9 @@ let package = Package(
         .executable(name: "Duet", targets: ["Duet"]),
         .executable(name: "duet-lab", targets: ["DuetLab"]),
     ],
-    dependencies: [
-        .package(url: "https://github.com/attaswift/BigInt", from: "5.7.0"),
-    ],
     targets: [
         .target(
             name: "DuetCore",
-            dependencies: [.product(name: "BigInt", package: "BigInt")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
@@ -24,7 +20,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "DuetLab",
-            dependencies: ["DuetCore", .product(name: "BigInt", package: "BigInt")],
+            dependencies: ["DuetCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

@@ -15,7 +15,7 @@ public enum Calibration {
         public let strength: Double
     }
 
-    public static func run(_ engine: CaptureEngine, microphone: AudioObjectID, clicks: Int = 6) throws -> [Measurement] {
+    public static func run(_ engine: Engine, microphone: AudioObjectID, clicks: Int = 6) throws -> [Measurement] {
         let probe = AcousticProbe()
         let rate = engine.sampleRate
         let delay = Double(engine.delayFrames) / rate
@@ -38,9 +38,7 @@ public enum Calibration {
                     for _ in 0..<clicks {
                         let frame = engine.ring.writeIndex + Int(0.05 * rate)
                         engine.injectClick(atFrame: frame)
-                        if let (anchorFrame, anchorTicks) = engine.anchor.load() {
-                            references[o].append(probe.seconds(anchorTicks) + Double(frame - Int(anchorFrame)) / rate)
-                        }
+                        if let heard = engine.heardTime(ofFrame: frame) { references[o].append(heard) }
                         Thread.sleep(forTimeInterval: spacing)
                     }
                     Thread.sleep(forTimeInterval: delay + 0.05)

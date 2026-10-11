@@ -67,33 +67,34 @@ public final class FrameRing: @unchecked Sendable {
     }
 }
 
-/// Lock-free "latest value" for a pair of 64-bit numbers (seqlock), written by the realtime thread.
-public final class Anchor: @unchecked Sendable {
+/// Lock-free latest value, written by one thread (possibly the realtime IO thread) and read by
+/// others without ever blocking the writer (seqlock: a reader retries if a write overlapped).
+public final class SeqLock<Value: BitwiseCopyable>: @unchecked Sendable {
     private let sequence = Atomic<UInt64>(0)
-    private let first = Atomic<Int64>(0)
-    private let second = Atomic<UInt64>(0)
+    private let storage: UnsafeMutablePointer<Value>
 
-    public init() {}
+    public init(_ value: Value) {
+        storage = .allocate(capacity: 1)
+        storage.initialize(to: value)
+    }
 
-    public func store(_ a: Int64, _ b: UInt64) {
+    deinit { storage.deallocate() }
+
+    public func store(_ value: Value) {
         let s = sequence.load(ordering: .relaxed)
         sequence.store(s &+ 1, ordering: .relaxed)
         atomicMemoryFence(ordering: .releasing)
-        first.store(a, ordering: .relaxed)
-        second.store(b, ordering: .relaxed)
+        storage.pointee = value
         sequence.store(s &+ 2, ordering: .releasing)
     }
 
-    /// Returns nil until the first store.
-    public func load() -> (Int64, UInt64)? {
+    public func load() -> Value {
         while true {
             let s1 = sequence.load(ordering: .acquiring)
-            if s1 == 0 { return nil }
             if s1 & 1 == 1 { continue }
-            let a = first.load(ordering: .relaxed)
-            let b = second.load(ordering: .relaxed)
+            let value = storage.pointee
             atomicMemoryFence(ordering: .acquiring)
-            if sequence.load(ordering: .relaxed) == s1 { return (a, b) }
+            if sequence.load(ordering: .relaxed) == s1 { return value }
         }
     }
 }

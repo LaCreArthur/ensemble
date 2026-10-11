@@ -23,12 +23,23 @@ struct DuetMenu: View {
             HStack {
                 Text("Duet").font(.headline)
                 Spacer()
-                Toggle("Duet", isOn: $duet.isOn).toggleStyle(.switch).labelsHidden()
+                Toggle("Share this Mac's sound", isOn: $duet.isOn).toggleStyle(.switch).labelsHidden()
+                    .help("On: this Mac's sound plays here and on the other Mac.")
             }
             Text(duet.status).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if duet.isReceiving {
+                HStack(spacing: 22) {
+                    Button { duet.control(.previous) } label: { Image(systemName: "backward.fill") }
+                    Button { duet.control(.playPause) } label: { Image(systemName: "playpause.fill") }
+                    Button { duet.control(.next) } label: { Image(systemName: "forward.fill") }
+                }
+                .buttonStyle(.borderless)
+                .font(.title3)
+                .frame(maxWidth: .infinity)
+            }
 
             Divider()
-            volumeRow("Main volume", value: $duet.mainVolume)
+            volumeRow("Main volume", value: $duet.shownMainVolume)
 
             Text("This Mac").font(.subheadline.bold())
             ForEach(duet.outputs) { output in
@@ -39,26 +50,16 @@ struct DuetMenu: View {
             }
 
             Text("Other Mac").font(.subheadline.bold())
-            Picker("Other Mac", selection: $duet.otherMacID) {
-                Text("None").tag(String?.none)
-                ForEach(duet.receivers) { Text($0.name).tag(Optional($0.id)) }
-                if let id = duet.otherMacID, !duet.receivers.contains(where: { $0.id == id }) {
-                    Text(duet.rememberedOtherMacName ?? "Previous choice").tag(Optional(id))
-                }
+            if !duet.otherMacStatus.isEmpty {
+                Text(duet.otherMacStatus).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            .labelsHidden()
-            if duet.otherMacID != nil {
-                volumeRow(nil, value: volume(Duet.other))
-                if !duet.otherMacStatus.isEmpty {
-                    Text(duet.otherMacStatus).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
+            ForEach(duet.link.pairable, id: \.id) { peer in
+                Button("Pair with \(peer.name)…") { duet.pair(with: peer) }
             }
 
             Divider()
             Button(duet.isTuning ? "Tuning…" : "Tune sync with the microphone") { duet.tuneSync() }
-                .disabled(!duet.isOn || duet.isTuning)
-            Button("Copy remote link for the other Mac") { duet.copyRemoteLink() }
-                .help("Paste it in Safari on the other Mac: play/pause, tracks and volumes from there.")
+                .disabled(!duet.isPlaying || duet.isTuning)
             Toggle("Open at login", isOn: Binding(get: { duet.openAtLogin }, set: { duet.openAtLogin = $0 }))
             Button("Quit Duet") { NSApplication.shared.terminate(nil) }
         }

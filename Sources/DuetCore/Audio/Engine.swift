@@ -3,20 +3,29 @@ import CoreAudio
 import Foundation
 import Synchronization
 
-/// Captures the sound of every app on this Mac (the apps themselves go silent), and plays it back
-/// on one or more local output devices after a fixed delay. The same captured frames go to `ring`
-/// for the network sender, together with an `anchor` that tells when each frame will be heard here.
+/// Plays one stereo stream on one or more local output devices, all heard together. The stream is
+/// either the sound of this Mac's apps, captured (the apps themselves go silent) and played after a
+/// fixed delay that gives the other Mac time to receive it, or the sound the other Mac sends. The
+/// stream's frames go to `ring`, and `anchor` tells when each frame is heard here.
 ///
-/// Timeline: captured frame X is written to the delay line at position X and the main output plays
-/// it D frames later. `anchor` holds (X, host time at which frame X is heard on the main output).
+/// Timeline: stream frame X is written to the delay line at position X and the main output plays it
+/// D frames later. `anchor` holds X and the host time at which frame X is heard on the main output.
 /// Every other output is heard `lag` seconds after the main output for the same cycle, so it plays
 /// frame X `lag` earlier in its own channels, and all outputs are heard together.
-public final class CaptureEngine: @unchecked Sendable {
-    public enum Source: Sendable {
-        /// Every process except the listed ones (the product: everything but Duet itself).
-        case allExcept([pid_t])
-        /// Only the listed processes (tests).
-        case only([pid_t])
+public final class Engine: @unchecked Sendable {
+    public enum Input: Sendable {
+        /// The sound of every process except the listed ones (the product: everything but Duet itself).
+        case captureAllExcept([pid_t])
+        /// The sound of the listed processes only (tests).
+        case captureOnly([pid_t])
+        /// The other Mac's stream.
+        case network(StreamReceiver)
+    }
+
+    /// Stream frame `frame` is heard on the main output at host time `time` (seconds).
+    public struct Anchor: BitwiseCopyable, Sendable {
+        public let frame: Int
+        public let time: Double
     }
 
     /// One local output device and its own settings.
@@ -39,15 +48,16 @@ public final class CaptureEngine: @unchecked Sendable {
     public let sampleRate: Double
     public let delayFrames: Int
     public let ring: FrameRing
-    public let anchor = Anchor()
-    /// Linear gain on the captured sound, before every output (this Mac and the network).
+    public let anchor = SeqLock<Anchor?>(nil)
+    /// Linear gain on the stream, before every output of this Mac (and the network).
     public let mainGain = AtomicFloat(1)
     /// Frames from the output callback to the ear, as reported by CoreAudio for the aggregate (main output first).
     public private(set) var outputLatencyFrames: UInt32 = 0
     /// Extra correction (seconds) for a main output that reports its latency wrongly.
     public let latencyTrim = AtomicFloat(0)
 
-    private let source: Source
+    private let input: Input
+    private let receiver: StreamReceiver?
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
@@ -58,18 +68,23 @@ public final class CaptureEngine: @unchecked Sendable {
     private let delayLine: UnsafeMutablePointer<Float>
     private var framesProcessed: Int = 0
     private var lastMainGain: Float = 1
-    private let ticksPerSecond: Double
+    /// One cycle of the input, interleaved stereo.
+    private let scratch: UnsafeMutablePointer<Float>
+    private static let maxFrames = 16_384
     /// Lags beyond this are not supported (the delay line holds D plus this much).
     private static let maxLagSeconds = 1.0
 
     private let pendingClick = Atomic<Int>(-1)
     private let click: [Float]
 
-    public init(source: Source, outputs: [OutputDevice], delaySeconds: Double) {
+    public init(input: Input, outputs: [OutputDevice], delaySeconds: Double, sourceRate: Double = 0) {
         precondition(!outputs.isEmpty)
-        self.source = source
+        self.input = input
+        if case .network(let receiver) = input { self.receiver = receiver } else { receiver = nil }
         self.outputs = outputs.map(Output.init)
         sampleRate = outputs[0].nominalSampleRate
+        receiver?.prepare(outputRate: sampleRate, sourceRate: sourceRate > 0 ? sourceRate : sampleRate)
+        scratch = .allocate(capacity: Self.maxFrames * 2)
         delayFrames = Int((delaySeconds * sampleRate).rounded())
         var c = 1
         while c < delayFrames + Int(Self.maxLagSeconds * sampleRate) + 8192 { c <<= 1 }
@@ -79,22 +94,20 @@ public final class CaptureEngine: @unchecked Sendable {
         delayLine.initialize(repeating: 0, count: c * 2)
         ring = FrameRing(capacityFrames: Int(sampleRate * 4))
         click = AcousticProbe.clickWaveform(sampleRate: sampleRate).map { $0 * 0.3 }
-        var timebase = mach_timebase_info_data_t()
-        mach_timebase_info(&timebase)
-        ticksPerSecond = 1e9 * Double(timebase.denom) / Double(timebase.numer)
     }
 
     deinit {
         stop()
         delayLine.deallocate()
+        scratch.deallocate()
     }
 
     public func start() throws {
         let tap = try makeTapDescription()
-        try check(AudioHardwareCreateProcessTap(tap, &tapID), "create process tap")
+        if let tap { try check(AudioHardwareCreateProcessTap(tap, &tapID), "create process tap") }
 
         let main = outputs[0].device
-        let description: [String: Any] = [
+        var description: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Duet",
             kAudioAggregateDeviceUIDKey: "duet.aggregate.\(UUID().uuidString)",
             kAudioAggregateDeviceMainSubDeviceKey: main.uid,
@@ -103,11 +116,10 @@ public final class CaptureEngine: @unchecked Sendable {
             kAudioAggregateDeviceSubDeviceListKey: outputs.map { output -> [String: Any] in
                 [kAudioSubDeviceUIDKey: output.device.uid, kAudioSubDeviceDriftCompensationKey: output.device.uid != main.uid]
             },
-            kAudioAggregateDeviceTapListKey: [[
-                kAudioSubTapUIDKey: tap.uuid.uuidString,
-                kAudioSubTapDriftCompensationKey: true,
-            ]],
         ]
+        if let tap {
+            description[kAudioAggregateDeviceTapListKey] = [[kAudioSubTapUIDKey: tap.uuid.uuidString, kAudioSubTapDriftCompensationKey: true]]
+        }
         do {
             try check(AudioHardwareCreateAggregateDevice(description as CFDictionary, &aggregateID), "create aggregate device")
             // The aggregate lists each sub-device's output buffers in sub-device order.
@@ -144,21 +156,38 @@ public final class CaptureEngine: @unchecked Sendable {
         }
     }
 
-    /// Host ticks per second (mach_absolute_time).
-    public var hostTicksPerSecond: Double { ticksPerSecond }
+    /// The aggregate's IO buffer size, output safety offset, and input latency (device + stream +
+    /// safety offset), in frames, for diagnosis.
+    public var ioFrames: (buffer: UInt32, safety: UInt32, inputLatency: UInt32) {
+        let input = kAudioObjectPropertyScopeInput
+        let streams = (try? CA.array(aggregateID, kAudioDevicePropertyStreams, input, as: AudioObjectID.self)) ?? []
+        let streamLatency = streams.first.flatMap { try? CA.scalar($0, kAudioStreamPropertyLatency, as: UInt32.self) } ?? 0
+        let inputLatency = ((try? CA.scalar(aggregateID, kAudioDevicePropertyLatency, input, as: UInt32.self)) ?? 0) + streamLatency
+            + ((try? CA.scalar(aggregateID, kAudioDevicePropertySafetyOffset, input, as: UInt32.self)) ?? 0)
+        return ((try? CA.scalar(aggregateID, kAudioDevicePropertyBufferFrameSize, as: UInt32.self)) ?? 0,
+                (try? CA.scalar(aggregateID, kAudioDevicePropertySafetyOffset, kAudioObjectPropertyScopeOutput, as: UInt32.self)) ?? 0,
+                inputLatency)
+    }
+
+    /// Host time (seconds) at which stream frame `frame` is heard on the main output.
+    public func heardTime(ofFrame frame: Int) -> Double? {
+        anchor.load().map { $0.time + Double(frame - $0.frame) / sampleRate }
+    }
 
     /// Adds a calibration click to the captured sound at capture frame `frame`, after the main gain,
     /// so it is heard even while the main gain is 0. One click at a time; `frame` must be in the future.
     public func injectClick(atFrame frame: Int) { pendingClick.store(frame, ordering: .releasing) }
     public var clickLength: Int { click.count }
 
-    private func makeTapDescription() throws -> CATapDescription {
+    private func makeTapDescription() throws -> CATapDescription? {
         let description: CATapDescription
-        switch source {
-        case .allExcept(let pids):
+        switch input {
+        case .captureAllExcept(let pids):
             description = CATapDescription(stereoGlobalTapButExcludeProcesses: try pids.map(processObject(for:)))
-        case .only(let pids):
+        case .captureOnly(let pids):
             description = CATapDescription(stereoMixdownOfProcesses: try pids.map(processObject(for:)))
+        case .network:
+            return nil
         }
         description.uuid = UUID()
         description.name = "Duet"
@@ -181,13 +210,22 @@ public final class CaptureEngine: @unchecked Sendable {
                         outputTime: UnsafePointer<AudioTimeStamp>) {
         let buffers = UnsafeMutableAudioBufferListPointer(output)
         guard let first = buffers.first, first.mNumberChannels > 0 else { return }
-        let frames = Int(first.mDataByteSize) / (MemoryLayout<Float>.size * Int(first.mNumberChannels))
+        let frames = min(Self.maxFrames, Int(first.mDataByteSize) / (MemoryLayout<Float>.size * Int(first.mNumberChannels)))
         if frames == 0 { return }
-
-        // 1. Captured frames x main gain (+ calibration click) -> delay line at framesProcessed, and -> ring.
         let start = framesProcessed
-        let inputs = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
-        copyInput(inputs, frames: frames, to: start)
+        // Stream frame `start` is heard on the main output D frames after output frame 0 of this cycle.
+        let ts = outputTime.pointee
+        let heardAt = ts.mFlags.contains(.hostTimeValid)
+            ? HostClock.seconds(ts.mHostTime) + (Double(outputLatencyFrames) + Double(delayFrames)) / sampleRate + Double(latencyTrim.value)
+            : nil
+
+        // 1. Input x main gain (+ calibration click) -> delay line at framesProcessed, and -> ring.
+        if let receiver {
+            receiver.render(frames: frames, heardAt: heardAt, into: scratch)
+        } else {
+            readTap(UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input)), frames: frames)
+        }
+        copyScratch(frames: frames, to: start)
         addPendingClick(start: start, frames: frames)
         var written = 0
         while written < frames {
@@ -216,20 +254,12 @@ public final class CaptureEngine: @unchecked Sendable {
         }
         framesProcessed = start + frames
 
-        // 3. Timeline: captured frame `start` is heard on the main output D frames after output frame 0 of this cycle.
-        let ts = outputTime.pointee
-        if ts.mFlags.contains(.hostTimeValid) {
-            let seconds = (Double(outputLatencyFrames) + Double(delayFrames)) / sampleRate + Double(latencyTrim.value)
-            anchor.store(Int64(start), ts.mHostTime &+ UInt64(max(0, seconds * ticksPerSecond)))
-        }
+        // 3. Timeline.
+        if let heardAt { anchor.store(Anchor(frame: start, time: heardAt)) }
     }
 
-    /// Copies the tap's stereo input, times the main gain, into the delay line (interleaved or planar).
-    private func copyInput(_ inputs: UnsafeMutableAudioBufferListPointer, frames: Int, to start: Int) {
-        let target = mainGain.value
-        let step = (target - lastMainGain) / Float(frames)
-        var gain = lastMainGain
-        lastMainGain = target
+    /// Copies the tap's stereo input (interleaved or planar) into `scratch`.
+    private func readTap(_ inputs: UnsafeMutableAudioBufferListPointer, frames: Int) {
         var n = 0
         if inputs.count > 0, let data0 = inputs[0].mData {
             let ch0 = Int(inputs[0].mNumberChannels)
@@ -237,17 +267,24 @@ public final class CaptureEngine: @unchecked Sendable {
             n = min(frames, Int(inputs[0].mDataByteSize) / (MemoryLayout<Float>.size * max(1, ch0)))
             let src1: UnsafeMutablePointer<Float>? = ch0 < 2 && inputs.count >= 2 ? inputs[1].mData?.assumingMemoryBound(to: Float.self) : nil
             for i in 0..<n {
-                gain += step
-                let p = ((start + i) & delayMask) * 2
-                let l = ch0 >= 2 ? src0[i * ch0] : src0[i]
-                let r = ch0 >= 2 ? src0[i * ch0 + 1] : (src1?[i] ?? src0[i])
-                delayLine[p] = l * gain
-                delayLine[p + 1] = r * gain
+                scratch[2 * i] = ch0 >= 2 ? src0[i * ch0] : src0[i]
+                scratch[2 * i + 1] = ch0 >= 2 ? src0[i * ch0 + 1] : (src1?[i] ?? src0[i])
             }
         }
-        for i in n..<frames {
+        if n < frames { (scratch + 2 * n).update(repeating: 0, count: 2 * (frames - n)) }
+    }
+
+    /// Copies `scratch`, times the main gain, into the delay line.
+    private func copyScratch(frames: Int, to start: Int) {
+        let target = mainGain.value
+        let step = (target - lastMainGain) / Float(frames)
+        var gain = lastMainGain
+        lastMainGain = target
+        for i in 0..<frames {
+            gain += step
             let p = ((start + i) & delayMask) * 2
-            delayLine[p] = 0; delayLine[p + 1] = 0
+            delayLine[p] = scratch[2 * i] * gain
+            delayLine[p + 1] = scratch[2 * i + 1] * gain
         }
     }
 

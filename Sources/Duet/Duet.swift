@@ -1,41 +1,41 @@
 import AppKit
 import CoreAudio
 import DuetCore
+import MediaPlayer
 import Observation
 import ServiceManagement
 import SystemConfiguration
 
 /// The app's state, and the rules that run the audio engine and the link to the other Mac.
 ///
-/// Rules: while Duet is on, every app's sound plays on the ticked outputs of this Mac and on the
-/// chosen other Mac, all heard together. Headphones as the Mac's output put Duet on standby (private
-/// listening). The Mac's own volume (keys, Control Center) is the main volume for every output;
-/// each output also has its own volume. The capture runs only while some app plays sound, and for a
-/// while after, because a running capture keeps the Mac from sleeping.
+/// Rules: Duet runs on both Macs. The Mac where Duet is on shares its sound: every app's sound plays
+/// on its ticked outputs and on the other Mac, all heard together; the other Mac plays along unless
+/// its output is headphones. Turning Duet on on one Mac turns it off on the other (the later switch
+/// wins). The sharing Mac's own volume (keys, Control Center) is the main volume of both Macs; each
+/// output also has its own volume, set on its Mac. The other Mac's menu and media keys control the
+/// music: play/pause, tracks, main volume. Headphones as a Mac's output put it on standby (private
+/// listening). The capture runs only while some app plays sound, and for a while after, because
+/// running audio keeps the Mac from sleeping.
 @MainActor @Observable
 final class Duet {
     // MARK: Remembered settings
 
     var isOn: Bool {
         didSet {
+            guard isOn != oldValue else { return }
+            since = Date().timeIntervalSince1970
             store.set(isOn, forKey: "on")
-            if isOn && !oldValue, let main = outputs.first(where: \.isBuiltIn), OutputDevice.defaultOutput() != main {
+            if isOn, let main = outputs.first(where: \.isBuiltIn), OutputDevice.defaultOutput() != main {
                 try? OutputDevice.setDefaultOutput(main)   // a click on Duet means "play on the speakers"
             }
             update()
         }
     }
+    /// When Duet was last turned on or off here (seconds since 1970): between the two Macs, the later switch wins.
+    private var since: Double { didSet { store.set(since, forKey: "since") } }
     /// Ticked outputs of this Mac (device UIDs).
     var chosenOutputs: Set<String> { didSet { store.set(Array(chosenOutputs), forKey: "outputs"); update() } }
-    /// The other Mac's receiver ID; never chosen automatically.
-    var otherMacID: String? {
-        didSet {
-            store.set(otherMacID, forKey: "otherMac")
-            store.set(receivers.first { $0.id == otherMacID }?.name, forKey: "otherMacName")
-            update()
-        }
-    }
-    /// Per-output volume, 0...1, by device UID; the other Mac's is under `Duet.other`.
+    /// Per-output volume, 0...1, by device UID.
     var volumes: [String: Double] { didSet { store.set(volumes, forKey: "volumes"); applyVolumes() } }
     /// Measured sync corrections (seconds) by device UID.
     private var lags: [String: Double] { didSet { store.set(lags, forKey: "lags") } }
@@ -45,134 +45,164 @@ final class Duet {
         set { try? newValue ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister() }
     }
 
-    static let other = "other-mac"
-
     // MARK: Live state
 
+    let link: Link
     private(set) var outputs: [OutputDevice] = []
-    private(set) var receivers: [ReceiverBrowser.Receiver] = []
     private(set) var status = ""
     private(set) var otherMacStatus = ""
     private(set) var isPlaying = false
     private(set) var isTuning = false
-    /// The Mac's own volume (0...1); setting it sets the Mac's volume.
+    /// This Mac's own volume (0...1); setting it sets the Mac's volume.
     var mainVolume: Double = 1 { didSet { if abs(Double(mainVolumeControl?.position ?? 1) - mainVolume) > 0.001 { mainVolumeControl?.position = Float(mainVolume) } } }
-    var rememberedOtherMacName: String? { store.string(forKey: "otherMacName") }
+    /// What the other Mac last said about itself; nil without a session.
+    private(set) var peer: PeerState?
+    /// True while this Mac plays the other Mac's sound.
+    var isReceiving: Bool { if case .stream = running?.input { true } else { false } }
+
+    struct PeerState: Equatable {
+        var on: Bool, since: Double, port: Int, playing: Bool, volume: Double, canPlay: Bool, lead: Double
+        init(_ m: [String: Any]) {
+            on = m["on"] as? Bool ?? false
+            since = m["since"] as? Double ?? 0
+            port = m["port"] as? Int ?? 0
+            playing = m["playing"] as? Bool ?? false
+            volume = m["volume"] as? Double ?? 1
+            canPlay = m["canPlay"] as? Bool ?? false
+            lead = m["lead"] as? Double ?? 0
+        }
+    }
+
+    private enum Input: Equatable {
+        case capture
+        case stream(address: String, port: UInt16, session: ObjectIdentifier)
+    }
 
     private struct Config: Equatable {
-        var outputs: [String]          // device UIDs, main output first
-        var other: ReceiverBrowser.Receiver?
+        var outputs: [String]   // device UIDs, main output first
         var delay: Double
+        var input: Input
     }
 
     private let store = UserDefaults.standard
-    private let browser = ReceiverBrowser()
     private let monitor = PlaybackMonitor(excluding: [getpid()])
     /// Keeps the capture running for a while after the last app stops, so pauses do not restart it.
     private var hold: Timer?
-    private var engine: CaptureEngine?
-    private var sender: AirPlaySender?
+    private var engine: Engine?
+    private var sender: StreamSender?
+    private var receiver: StreamReceiver?
     private var running: Config?
     private var mainVolumeControl: SystemVolume?
     private var observers: [AnyObject] = []
     private var volumeObservers: [AnyObject] = []
-    private var retry: Timer?
-    private let remote: RemoteServer
+    /// The last state sent to the other Mac, and in which session.
+    private var sentState: (state: [String: AnyHashable], session: ObjectIdentifier)?
+    private var remoteCommands: [(MPRemoteCommand, Any)] = []
+    /// Keeps App Nap away from the stream threads while sound plays.
+    private var activity: NSObjectProtocol? { didSet { if let oldValue { ProcessInfo.processInfo.endActivity(oldValue) } } }
 
-    /// Lead time the other Mac gets: the sound is delayed this much on this Mac while it plays there.
-    static let networkDelay = 0.3
+    /// Lead time the other Mac gets: the sound is delayed this much here while it plays there.
+    static let networkDelay = 0.15
     static let holdTime: TimeInterval = 300
 
     init() {
         isOn = store.bool(forKey: "on")
+        since = store.double(forKey: "since")
         chosenOutputs = Set(store.stringArray(forKey: "outputs") ?? ["BuiltInSpeakerDevice"])
-        otherMacID = store.string(forKey: "otherMac")
         volumes = store.dictionary(forKey: "volumes") as? [String: Double] ?? [:]
         lags = store.dictionary(forKey: "lags") as? [String: Double] ?? [:]
-        var key = store.string(forKey: "remoteKey") ?? ""
-        if key.isEmpty {
-            key = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
-            store.set(key, forKey: "remoteKey")
+        var id = store.string(forKey: "deviceID") ?? ""
+        if id.isEmpty {
+            id = UUID().uuidString
+            store.set(id, forKey: "deviceID")
+            try? SMAppService.mainApp.register()   // first launch: open at login
         }
-        remote = RemoteServer(key: key)
-        observers = DeviceEvents.observe { [weak self] in MainActor.assumeIsolated { self?.update() } }
-        browser.onChange = { [weak self] list in
+        let name = SCDynamicStoreCopyComputerName(nil, nil) as String? ?? Host.current().localizedName ?? "Mac"
+        link = Link(me: Link.Peer(id: id, name: name), pairing: PairingStore.load())
+        link.onPaired = { PairingStore.save($0) }
+        link.confirm = { peer, code, reply in
+            DispatchQueue.main.async {
+                NSApp.activate()
+                let alert = NSAlert()
+                alert.messageText = "Pair with \(peer.name)?"
+                alert.informativeText = "Pair only if \(peer.name) shows the same code:\n\n\(code)"
+                alert.addButton(withTitle: "Pair")
+                alert.addButton(withTitle: "Cancel")
+                reply(alert.runModal() == .alertFirstButtonReturn)
+            }
+        }
+        link.onChange = { [weak self] in
             guard let self else { return }
-            receivers = list
-            if let name = list.first(where: { $0.id == self.otherMacID })?.name { store.set(name, forKey: "otherMacName") }
+            if link.session == nil { peer = nil }
             update()
         }
-        browser.start()
+        link.onMessage = { [weak self] in self?.received($0) }
+        link.start()
+        observers = DeviceEvents.observe { [weak self] in MainActor.assumeIsolated { self?.update() } }
         monitor.onChange = { [weak self] _ in MainActor.assumeIsolated { self?.appsPlayingChanged() } }
         monitor.start()
-        remote.handle = { [weak self] action, parameters in self?.remoteCommand(action, parameters) ?? [:] }
-        try? remote.start()
         update()
-    }
-
-    // MARK: Remote (the web page the other Mac opens)
-
-    /// The link to open once in Safari on the other Mac.
-    var remoteLink: String {
-        let host = (SCDynamicStoreCopyLocalHostName(nil) as String?).map { "\($0).local" } ?? "localhost"
-        return remote.link(host: host)
-    }
-
-    func copyRemoteLink() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(remoteLink, forType: .string)
-    }
-
-    private func remoteCommand(_ action: String, _ parameters: [String: String]) -> [String: Any] {
-        switch action {
-        case "playPause", "next", "previous": MediaCommand(rawValue: action)?.perform()
-        case "on": isOn = true
-        case "off": isOn = false
-        case "volume":
-            if let id = parameters["id"], let value = parameters["value"].flatMap(Double.init) {
-                if id == "main" { mainVolume = max(0, min(1, value)) } else { setVolume(id, max(0, min(1, value))) }
-            }
-        default: break
-        }
-        var volumes: [[String: Any]] = [["id": "main", "name": "Main volume", "value": mainVolume]]
-        for output in outputs where chosenOutputs.contains(output.uid) {
-            volumes.append(["id": output.uid, "name": output.name, "value": volume(output.uid)])
-        }
-        if otherMacID != nil {
-            let name = receivers.first { $0.id == otherMacID }?.name ?? rememberedOtherMacName ?? "Other Mac"
-            volumes.append(["id": Self.other, "name": name, "value": volume(Self.other)])
-        }
-        let other = otherMacStatus.isEmpty ? "" : " · Other Mac: " + otherMacStatus
-        return ["on": isOn, "status": status + other, "volumes": volumes]
     }
 
     func volume(_ key: String) -> Double { volumes[key] ?? 1 }
     func setVolume(_ key: String, _ value: Double) { volumes[key] = value }
 
+    /// The main volume as the menu shows it: the sharing Mac's while this Mac plays its sound.
+    var shownMainVolume: Double {
+        get { isReceiving ? peer?.volume ?? 1 : mainVolume }
+        set {
+            guard isReceiving else { return mainVolume = newValue }
+            peer?.volume = newValue
+            link.send(["t": "volume", "value": newValue])
+        }
+    }
+
+    /// Play/pause and tracks on the sharing Mac, from this Mac's menu or media keys.
+    func control(_ command: MediaCommand) { link.send(["t": "media", "cmd": command.rawValue]) }
+
+    func pair(with peer: Link.Peer) { link.pair(with: peer) }
+
     // MARK: Rules
 
-    /// Brings the engine and the link in line with the settings and the devices present now.
+    /// Brings the engine and the link in line with the settings, the devices and the other Mac.
     func update() {
         outputs = OutputDevice.all().filter { !$0.isPersonal }
         watchMainVolume()
+        mainVolume = Double(mainVolumeControl?.position ?? 1)
         let headphones = OutputDevice.defaultOutput()?.isPersonal ?? false
+        let session = link.session
+        let peer = session == nil ? nil : self.peer
+        if isOn, let peer, let session, peer.on, (peer.since, session.peer.id) > (since, link.me.id) {
+            isOn = false   // the other Mac was switched on later; this runs update() again
+            return
+        }
+        let main = outputs.first(where: \.isBuiltIn) ?? outputs.first
+        // The built-in speakers always drive the timing, silent if not ticked.
+        let devices = [main].compactMap { $0 } + outputs.filter { $0.uid != main?.uid && chosenOutputs.contains($0.uid) }
+        let localLead = devices.map { max(0, lags[$0.uid] ?? 0) }.max() ?? 0
         let wanted = monitor.isPlaying || hold != nil || isTuning
         var desired: Config?
-        if isOn, !headphones, wanted, let main = outputs.first(where: \.isBuiltIn) ?? outputs.first {
-            // The built-in speakers always drive the timing, silent if not ticked.
-            let extra = outputs.filter { $0.uid != main.uid && chosenOutputs.contains($0.uid) }
-            let other = receivers.first { $0.id == otherMacID }
-            let localDelay = ([main] + extra).map { max(0, lags[$0.uid] ?? 0) }.max() ?? 0
-            desired = Config(outputs: [main.uid] + extra.map(\.uid), other: other, delay: other == nil ? localDelay : Self.networkDelay)
+        if !devices.isEmpty, !headphones {
+            if isOn, wanted {
+                let delay = peer?.canPlay == true ? max(localLead, Self.networkDelay + (peer?.lead ?? 0)) : localLead
+                desired = Config(outputs: devices.map(\.uid), delay: delay, input: .capture)
+            } else if !isOn, let peer, let session, peer.on, peer.port > 0, peer.port <= Int(UInt16.max) {
+                let input = Input.stream(address: session.address, port: UInt16(peer.port), session: ObjectIdentifier(session.crypto))
+                desired = Config(outputs: devices.map(\.uid), delay: localLead, input: input)
+            }
         }
         if desired != running { restart(desired) }
+        updateSender(session: session, peerPlays: peer?.canPlay == true)
 
-        let other = receivers.first { $0.id == otherMacID }
-        let names = ListFormatter.localizedString(byJoining: outputs.filter { chosenOutputs.contains($0.uid) }.map(\.name) + [other?.name].compactMap { $0 })
-        if !isOn {
-            status = "Off"
-        } else if headphones {
+        let peerName = session?.peer.name ?? link.pairing?.peer.name ?? "the other Mac"
+        let names = ListFormatter.localizedString(byJoining: outputs.filter { chosenOutputs.contains($0.uid) }.map(\.name)
+            + (peer?.canPlay == true ? [peerName] : []))
+        if isReceiving {
+            status = "Playing the sound of \(peerName)"
+        } else if headphones && (isOn || peer?.on == true) {
             status = "Standby: headphones are this Mac's output"
+        } else if !isOn {
+            status = "Off"
         } else if names.isEmpty {
             status = "Playing nowhere: tick an output"
         } else if !wanted {
@@ -183,44 +213,77 @@ final class Duet {
             status = isTuning ? "Tuning: listening to each output…" : "Playing on " + names
         }
         isPlaying = engine != nil
-        if otherMacID == nil || !isOn || headphones {
-            otherMacStatus = ""
-        } else if other == nil {
-            otherMacStatus = "Not on the network"
-        } else if sender == nil {
-            otherMacStatus = ""
-        }
+        otherMacStatus = otherMacText(peer: peer, session: session)
         applyVolumes()
+        updateNowPlaying()
+        sendState(canPlay: !isOn && !headphones && !devices.isEmpty, lead: localLead)
+    }
+
+    private func otherMacText(peer: PeerState?, session: Link.Session?) -> String {
+        if let note = link.note { return note }
+        guard let pairing = link.pairing else {
+            return link.nearby.isEmpty ? "Open Duet on your other Mac to pair it." : ""
+        }
+        let name = pairing.peer.name
+        guard session != nil, let peer else {
+            return link.nearby.contains { $0.id == pairing.peer.id } ? "Connecting to \(name)…" : "\(name) is not on the network."
+        }
+        if peer.on { return "\(name) shares its sound." }
+        if isOn { return peer.canPlay ? "\(name) plays along." : "\(name) is on headphones." }
+        return "\(name) is ready."
     }
 
     private func restart(_ config: Config?) {
-        retry?.invalidate()
-        sender?.stop()
-        sender = nil
+        stopSender()
+        receiver?.stop()
+        receiver = nil
         engine?.stop()
         engine = nil
         running = config
+        activity = nil
         guard let config else { return }
         let devices = config.outputs.compactMap { uid in outputs.first { $0.uid == uid } }
-        let engine = CaptureEngine(source: .allExcept([getpid()]), outputs: devices, delaySeconds: config.delay)
+        let input: Engine.Input
+        switch config.input {
+        case .capture:
+            input = .captureAllExcept([getpid()])
+        case .stream(let address, let port, _):
+            guard let session = link.session, let receiver = try? StreamReceiver(crypto: session.crypto, source: address, port: port) else {
+                running = nil
+                return
+            }
+            receiver.start()
+            self.receiver = receiver
+            input = .network(receiver)
+        }
+        let engine = Engine(input: input, outputs: devices, delaySeconds: config.delay)
         for output in engine.outputs { output.lag.value = Float(lags[output.device.uid] ?? 0) }
         do {
             try engine.start()
         } catch {
+            receiver?.stop()
+            receiver = nil
             running = nil
             return
         }
         self.engine = engine
-        if let other = config.other {
-            let sender = AirPlaySender(endpoint: other.endpoint, capture: engine)
-            sender.onState = { [weak self, weak sender] state in
-                DispatchQueue.main.async { MainActor.assumeIsolated { if let sender { self?.senderChanged(sender, state) } } }
-            }
-            self.sender = sender
-            otherMacStatus = "Connecting…"
-            sender.start()
-        }
+        activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical], reason: "Playing sound")
         applyVolumes()
+    }
+
+    /// The stream to the other Mac runs while this Mac captures its sound and the other Mac plays along.
+    private func updateSender(session: Link.Session?, peerPlays: Bool) {
+        let wanted = running?.input == .capture && peerPlays && session != nil
+        if !wanted || sender?.crypto !== session?.crypto { stopSender() }
+        guard wanted, sender == nil, let engine, let session, let sender = try? StreamSender(engine: engine, crypto: session.crypto) else { return }
+        sender.start()
+        self.sender = sender
+        applyVolumes()
+    }
+
+    private func stopSender() {
+        sender?.stop()
+        sender = nil
     }
 
     private func appsPlayingChanged() {
@@ -231,22 +294,62 @@ final class Duet {
         update()
     }
 
-    private func senderChanged(_ sender: AirPlaySender, _ state: AirPlaySender.State) {
-        guard sender === self.sender, let name = running?.other?.name else { return }
-        switch state {
-        case .connecting: otherMacStatus = "Connecting…"
-        case .streaming: otherMacStatus = "Playing"
-        case .stopped: otherMacStatus = ""
-        case .failed(let reason):
-            let refused = reason.contains("pairing refused")
-            otherMacStatus = refused
-                ? "\(name) refuses. On it: System Settings > General > AirDrop & Handoff > Allow AirPlay for: Anyone on the Same Network"
-                : "Cannot reach \(name), retrying"
-            retry?.invalidate()
-            retry = Timer.scheduledTimer(withTimeInterval: refused ? 20 : 5, repeats: false) { [weak self, weak sender] _ in
-                MainActor.assumeIsolated { if let sender, sender === self?.sender { sender.start() } }
+    // MARK: The other Mac
+
+    /// Tells the other Mac what it needs, whenever that changes.
+    private func sendState(canPlay: Bool, lead: Double) {
+        guard let session = link.session else { return sentState = nil }
+        let state: [String: AnyHashable] = [
+            "t": "state", "on": isOn, "since": since, "port": Int(sender?.port ?? 0), "playing": monitor.isPlaying,
+            "volume": mainVolume, "canPlay": canPlay, "lead": lead,
+        ]
+        let id = ObjectIdentifier(session.crypto)
+        guard sentState?.state != state || sentState?.session != id else { return }
+        sentState = (state, id)
+        link.send(state)
+    }
+
+    private func received(_ message: [String: Any]) {
+        switch message["t"] as? String {
+        case "state":
+            peer = PeerState(message)
+            update()
+        case "media":
+            if isOn, let command = (message["cmd"] as? String).flatMap(MediaCommand.init(rawValue:)) { command.perform() }
+        case "volume":
+            if isOn, let value = message["value"] as? Double { mainVolume = max(0, min(1, value)) }
+        default:
+            break
+        }
+    }
+
+    /// While this Mac plays the other Mac's sound, Duet is its now-playing app: the media keys and
+    /// Control Center control the music on the other Mac.
+    private func updateNowPlaying() {
+        let center = MPNowPlayingInfoCenter.default()
+        guard isReceiving, let name = link.session?.peer.name else {
+            guard !remoteCommands.isEmpty else { return }
+            for (command, target) in remoteCommands { command.removeTarget(target) }
+            remoteCommands = []
+            center.nowPlayingInfo = nil
+            center.playbackState = .stopped
+            return
+        }
+        if remoteCommands.isEmpty {
+            let commands = MPRemoteCommandCenter.shared()
+            let pairs: [(MPRemoteCommand, MediaCommand)] = [
+                (commands.togglePlayPauseCommand, .playPause), (commands.playCommand, .play), (commands.pauseCommand, .pause),
+                (commands.nextTrackCommand, .next), (commands.previousTrackCommand, .previous),
+            ]
+            remoteCommands = pairs.map { command, media in
+                (command, command.addTarget { [weak self] _ in
+                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.control(media) } }
+                    return .success
+                })
             }
         }
+        center.nowPlayingInfo = [MPMediaItemPropertyTitle: "Sound of \(name)", MPMediaItemPropertyArtist: "Duet"]
+        center.playbackState = peer?.playing == true ? .playing : .paused
     }
 
     // MARK: Volume
@@ -255,28 +358,21 @@ final class Duet {
         let device = outputs.first(where: \.isBuiltIn)?.id
         guard device != mainVolumeControl?.device else { return }
         mainVolumeControl = device.map(SystemVolume.init(device:))
-        volumeObservers = mainVolumeControl?.observe { [weak self] in MainActor.assumeIsolated { self?.mainVolumeChanged() } } ?? []
-        mainVolumeChanged()
+        volumeObservers = mainVolumeControl?.observe { [weak self] in MainActor.assumeIsolated { self?.update() } } ?? []
     }
 
-    private func mainVolumeChanged() {
-        mainVolume = Double(mainVolumeControl?.position ?? 1)
-        applyVolumes()
-    }
-
-    /// The main output's device applies the main volume itself; the others get it as gain.
+    /// The main output's device applies this Mac's volume itself; the others get it as gain, and so
+    /// does the other Mac while it plays this Mac's sound.
     private func applyVolumes() {
         guard let engine else { return }
         let main = mainVolumeControl
         for (i, output) in engine.outputs.enumerated() {
             let uid = output.device.uid
             let own = Float(volume(uid))
-            let ticked = chosenOutputs.contains(uid)
-            output.gain.value = ticked ? own * own * (i == 0 ? 1 : main?.gain ?? 1) : 0
+            output.gain.value = chosenOutputs.contains(uid) ? own * own * (i == 0 ? 1 : main?.gain ?? 1) : 0
         }
-        // AirPlay volume follows the slider position: -30 dB (quietest) ... 0 dB, below that silent.
-        let position = (main?.isMuted ?? false ? 0 : Double(main?.position ?? 1)) * volume(Self.other)
-        sender?.volumeDB = position <= 0 ? -144 : Float(-30 + 30 * position)
+        // Silent there while tuning: the clicks are for this Mac's microphone.
+        sender?.gain.value = isTuning ? 0 : main?.gain ?? 1
     }
 
     // MARK: Sync tuning

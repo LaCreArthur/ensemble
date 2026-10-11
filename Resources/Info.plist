@@ -13,7 +13,7 @@
     <key>LSUIElement</key><true/>
     <key>NSAudioCaptureUsageDescription</key><string>Duet plays the sound of your apps on your other speakers and on your other Mac.</string>
     <key>NSMicrophoneUsageDescription</key><string>When you tune the sync, Duet listens for a few seconds to hear when each speaker plays.</string>
-    <key>NSLocalNetworkUsageDescription</key><string>Duet finds your other Mac, sends it the sound, and serves the remote page it opens.</string>
-    <key>NSBonjourServices</key><array><string>_airplay._tcp</string></array>
+    <key>NSLocalNetworkUsageDescription</key><string>Duet finds your other Mac running Duet, and exchanges the sound and the music controls with it.</string>
+    <key>NSBonjourServices</key><array><string>_duet._tcp</string></array>
 </dict>
 </plist>
