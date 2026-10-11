@@ -12,7 +12,8 @@ import Synchronization
 /// copy. Wi-Fi gives two routes: through the router, and the direct Mac-to-Mac link that AirDrop and
 /// Universal Control use. One radio serves them in turn, so one is nearly always open: the router
 /// route stalls about 90 ms twice a second while the radio visits the direct link's channel, and
-/// the direct link stalls for longer when nothing holds it in real-time mode.
+/// the direct link stalls for longer when nothing holds it in real-time mode. (A router on the direct
+/// link's channel, 44 here, would end the router route's stalls, but this router's settings are not ours.)
 enum StreamPacket {
     static let audio: UInt8 = 1, resend: UInt8 = 2, clockRequest: UInt8 = 3, clockAnswer: UInt8 = 4
     static let frames = 240
