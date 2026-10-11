@@ -207,7 +207,7 @@ final class Duet {
         }
         // The built-in speakers always drive the timing, silent if not ticked.
         let devices = [main].compactMap { $0 } + outputs.filter { $0.uid != main?.uid && chosenOutputs.contains($0.uid) }
-        let localLead = devices.map { max(0, lag($0, main: main)) }.max() ?? 0
+        let localLead = main.flatMap { main in devices.map { Engine.lead(of: $0, lag: lag($0), main: main) }.max() } ?? 0
         let wanted = monitor.isPlaying || hold != nil || isTuning
         var desired: Config?
         if !devices.isEmpty, headphones == nil {
@@ -265,15 +265,17 @@ final class Duet {
         return "\(name) is ready."
     }
 
-    /// Seconds an output is heard after the main output: measured by the tune, else what the devices report.
-    private func lag(_ device: OutputDevice, main: OutputDevice?) -> Double {
-        lags[device.uid] ?? max(0, device.outputLatency - (main?.outputLatency ?? 0))
-    }
+    /// Seconds an output is heard after the latency its device reports, as the tune measured.
+    private func lag(_ device: OutputDevice) -> Double { lags[device.uid] ?? 0 }
 
     private func restart(_ config: Config?) {
         stopSender()
         receiver?.stop()
         receiver = nil
+        for output in engine?.outputs ?? [] {
+            let missed = output.missed.load(ordering: .relaxed)
+            if missed > 0 { log.notice("\(output.device.name, privacy: .public) played \(missed) frames of silence: the delay was too short for it") }
+        }
         engine?.stop()
         engine = nil
         healthTimer?.invalidate()
@@ -297,7 +299,7 @@ final class Duet {
             input = .network(receiver)
         }
         let engine = Engine(input: input, outputs: devices, delaySeconds: config.delay)
-        for output in engine.outputs { output.lag.value = Float(lag(output.device, main: devices.first)) }
+        for output in engine.outputs { output.lag.value = Float(lag(output.device)) }
         engine.latencyTrim.value = Float(trim)
         do {
             try engine.start()
@@ -466,7 +468,7 @@ final class Duet {
     // MARK: Sync tuning
 
     /// Measures with the microphone when each output, then the other Mac, is heard, and corrects them
-    /// (music pauses ~2 s per output). The other Mac is set to be heard together with this one here,
+    /// (music pauses ~3 s per output). The other Mac is set to be heard together with this one here,
     /// where the listener sits.
     func tuneSync() {
         guard !isTuning, let mic = builtInMicrophone() else { return }

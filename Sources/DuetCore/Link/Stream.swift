@@ -239,12 +239,7 @@ public final class StreamReceiver: @unchecked Sendable {
 
     // IO thread only.
     private var outputRate = 48_000.0
-    private var interpolator = Interpolator()
-    private let input: UnsafeMutablePointer<Float>
-    private static let inputCapacity = 20_000
-    private var position: Double?
-    private var integral = 0.0
-    private var lastGain: Float = 0
+    private var playhead = Playhead(ratio: 1)
     private var playingStream: UInt32 = 0
 
     // Shared statistics.
@@ -258,19 +253,17 @@ public final class StreamReceiver: @unchecked Sendable {
         store.initialize(repeating: 0, count: Self.slots * StreamPacket.frames * 2)
         tags = .allocate(capacity: Self.slots)
         for i in 0..<Self.slots { (tags + i).initialize(to: Atomic(-1)) }
-        input = .allocate(capacity: Self.inputCapacity * 2)
     }
 
     deinit {
         store.deallocate()
         tags.deallocate()
-        input.deallocate()
     }
 
     /// Called by the engine before it starts (not realtime).
     func prepare(outputRate: Double, sourceRate: Double) {
         self.outputRate = outputRate
-        interpolator = Interpolator(ratio: sourceRate / outputRate)
+        playhead = Playhead(ratio: sourceRate / outputRate)
     }
 
     public func start() {
@@ -462,55 +455,34 @@ public final class StreamReceiver: @unchecked Sendable {
     func render(frames: Int, heardAt: Double?, into output: UnsafeMutablePointer<Float>) {
         guard let m = mapping.load(), let heardAt else {
             output.update(repeating: 0, count: frames * 2)
-            position = nil
+            playhead.reset()
             return
         }
         // Where the sender is in its stream at that moment, in its frames.
         let sourceTime = heardAt + m.clock.offset(at: heardAt)
         let target = Double(m.frame) + (sourceTime - m.time) * m.rate
-        let nominal = m.rate / outputRate
-        if m.stream != playingStream || position == nil || abs(target - position!) > 0.01 * m.rate {
-            if statsLock.try() { stats.jumps += 1; statsLock.unlock() }
-            position = target
-            integral = 0
+        if m.stream != playingStream {
+            playhead.reset()
             playingStream = m.stream
         }
-        // PI loop on the position error (seconds), within +-1000 ppm: about 4 s to settle, no pitch change heard.
-        let error = (target - position!) / m.rate
-        let dt = Double(frames) / outputRate
-        integral = max(-5e-4, min(5e-4, integral + 0.0625 * error * dt))
-        let correction = max(-1e-3, min(1e-3, 0.5 * error + integral))
-        let step = nominal * (1 + correction)
-
-        let half = Interpolator.half
-        let first = Int(position!.rounded(.down)) - half + 1
-        let last = Int((position! + Double(frames - 1) * step).rounded(.down)) + half
-        let span = last - first + 1
-        guard span <= Self.inputCapacity, frames * 2 <= Self.inputCapacity * 2 else {
-            output.update(repeating: 0, count: frames * 2)
-            position = nil
-            return
-        }
-        let concealed = gather(first: first, count: span)
-        interpolator.render(input: input, inputStart: first, start: position!, step: step, count: frames,
-                            gain: (lastGain, m.gain), into: output)
-        lastGain = m.gain
-        position! += Double(frames) * step
+        guard let r = playhead.render(target: target, rate: m.rate, nominal: m.rate / outputRate, frames: frames, gain: m.gain,
+                                      into: output, fetch: gather) else { return }
 
         // Margin: how long before this moment the last frame needed here arrived. Approximated from the
         // newest packet: it is ahead of the last needed frame by (newest end - last) frames.
-        let margin = Double(m.frame + StreamPacket.frames - 1 - last) / m.rate
+        let margin = Double(m.frame + StreamPacket.frames - 1 - r.last) / m.rate
         if statsLock.try() {
+            stats.jumps += r.jumped ? 1 : 0
             stats.minMargin = min(stats.minMargin, margin)
-            stats.concealed += concealed > 0 ? frames : 0
-            stats.error = error
+            stats.concealed += r.missing > 0 ? frames : 0
+            stats.error = r.error
             statsLock.unlock()
         }
     }
 
     /// Copies source frames [first, first + count) into `input`, silence where a packet is missing.
     /// Returns the number of missing frames.
-    private func gather(first: Int, count: Int) -> Int {
+    private func gather(first: Int, count: Int, into input: UnsafeMutablePointer<Float>) -> Int {
         let size = StreamPacket.frames
         var done = 0, missingFrames = 0
         while done < count {

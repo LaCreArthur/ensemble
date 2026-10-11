@@ -3,9 +3,9 @@ import Foundation
 
 /// Measures with the microphone when each output is heard compared with the main output, and sets
 /// each output's lag so that all outputs are heard together. Clicks go through the real path
-/// (delay line, aggregate, device), so everything the devices do not report is included.
+/// (ring, device), so everything the devices do not report is included.
 /// The other Mac, if given, is measured last as one more output; the caller applies its result.
-/// The music is muted while it runs (about 2 s per output).
+/// The music is muted while it runs (about 3 s per output).
 public enum Calibration {
     public struct Measurement: Sendable {
         public let output: String
@@ -34,7 +34,8 @@ public enum Calibration {
         let probe = AcousticProbe()
         let rate = engine.sampleRate
         let delay = Double(engine.delayFrames) / rate
-        let spacing = 0.2
+        // Clicks farther apart than the search window, so a slow output (Bluetooth) cannot be matched to its previous click.
+        let spacing = 0.4
         let savedMain = engine.mainGain.value
         let savedGains = engine.outputs.map { $0.gain.value }
         defer {
@@ -82,7 +83,7 @@ public enum Calibration {
         let names = engine.outputs.map(\.device.name) + (other.map { [$0.name] } ?? [])
         let measured: [Measurement] = zip(names, references).map { name, refs in
             // Most clicks must be clearly heard; the median ignores a click masked by a noise.
-            let heard = probe.detect(in: recording, references: refs, minDelay: -0.1, maxDelay: 0.25).compactMap(\.first).filter { $0.strength >= 8 }
+            let heard = probe.detect(in: recording, references: refs, minDelay: -0.1, maxDelay: 0.3).compactMap(\.first).filter { $0.strength >= 8 }
             let strength = heard.map(\.strength).sorted().first ?? 0
             guard heard.count * 3 >= refs.count * 2, !refs.isEmpty else {
                 return Measurement(output: name, delay: nil, strength: strength)

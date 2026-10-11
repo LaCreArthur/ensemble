@@ -185,6 +185,9 @@ public struct OutputDevice: Hashable, Identifiable, Sendable {
 
     /// Seconds between handing a frame to the device and hearing it, as the device reports.
     public var outputLatency: Double { Double(outputLatencyFrames) / nominalSampleRate }
+
+    /// Frames the device asks for in each cycle.
+    public var bufferFrames: UInt32 { (try? CA.scalar(id, kAudioDevicePropertyBufferFrameSize, as: UInt32.self)) ?? 512 }
 }
 
 /// The Mac's built-in microphone, if it has one.

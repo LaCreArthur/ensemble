@@ -369,6 +369,36 @@ case "calibrate":
     engine.stop()
     silent.terminate()
 
+case "follow":
+    // Silent check that every output but the main one gets the stream in time: runs the engine with all
+    // gains at 0 and the delay the outputs need minus --short seconds, then prints the frames each output
+    // played as silence because the stream was not there yet (0 expected with --short 0).
+    let names = (option("speakers") ?? "MacBook Pro Speakers,LG HDR 4K").split(separator: ",").map(String.init)
+    let devices = names.map(device(named:))
+    let lag = Double(option("lag") ?? "0")!
+    let seconds = Double(option("seconds") ?? "10")!
+    let lead = devices.map { Engine.lead(of: $0, lag: lag, main: devices[0]) }.max() ?? 0
+    let silent = Process()
+    silent.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    silent.arguments = ["clicks", "--amp", "0", "--at", String(AcousticProbe().now() + seconds + 2)]
+    try silent.run()
+    Thread.sleep(forTimeInterval: 0.6)
+    let engine = Engine(input: .captureOnly([silent.processIdentifier]), outputs: devices,
+                        delaySeconds: max(0, lead - Double(option("short") ?? "0")!))
+    engine.mainGain.value = 0
+    for output in engine.outputs {
+        output.gain.value = 0
+        output.lag.value = Float(lag)
+    }
+    try engine.start()
+    Thread.sleep(forTimeInterval: seconds)
+    engine.stop()
+    silent.terminate()
+    print(String(format: "delay %.1f ms (lead %.1f ms)", Double(engine.delayFrames) / engine.sampleRate * 1000, lead * 1000))
+    for output in engine.outputs {
+        print("\(output.device.name): rate \(output.device.nominalSampleRate), buffer \(output.device.bufferFrames), latency \(String(format: "%.1f", output.device.outputLatency * 1000)) ms, silent frames \(output.missed.load(ordering: .relaxed))")
+    }
+
 case "hold":
     // Runs the product engine (every app but this tool) on --speakers for --seconds.
     let names = (option("speakers") ?? "MacBook Pro Speakers,LG HDR 4K").split(separator: ",").map(String.init)

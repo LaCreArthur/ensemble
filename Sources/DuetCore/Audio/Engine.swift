@@ -8,10 +8,13 @@ import Synchronization
 /// fixed delay that gives the other Mac time to receive it, or the sound the other Mac sends. The
 /// stream's frames go to `ring`, and `anchor` tells when each frame is heard here.
 ///
-/// Timeline: stream frame X is written to the delay line at position X and the main output plays it
-/// D frames later. `anchor` holds X and the host time at which frame X is heard on the main output.
-/// Every other output is heard `lag` seconds after the main output for the same cycle, so it plays
-/// frame X `lag` earlier in its own channels, and all outputs are heard together.
+/// Timeline: stream frame X is written to `ring` at index X and the main output plays it D frames
+/// later. `anchor` holds X and the host time at which frame X is heard on the main output. Every
+/// other output runs on its own device and clock, as the other Mac does: each cycle it plays the
+/// frame the main output plays at the moment this output is heard (its reported latency plus `lag`),
+/// resampled to its own rate. A combined (aggregate) device would delay its fastest devices to match
+/// the slowest one's reported latency, so a slow output, such as a Bluetooth speaker, would delay
+/// the main output by an amount the engine cannot see.
 public final class Engine: @unchecked Sendable {
     public enum Input: Sendable {
         /// The sound of every process except the listed ones (the product: everything but Duet itself).
@@ -33,17 +36,24 @@ public final class Engine: @unchecked Sendable {
         public let device: OutputDevice
         /// Linear gain for this output only.
         public let gain = AtomicFloat(1)
-        /// Seconds this output is heard after the main output when both play the same cycle
-        /// (latency the device does not report, for example a screen's own processing).
+        /// Seconds this output is heard after the latency its device reports (for example a screen's
+        /// own processing, or a Bluetooth speaker that reports less than it takes). Not for the main output.
         public let lag = AtomicFloat(0)
-        // Its buffers in the aggregate's output list (set at start), and IO-thread state.
-        fileprivate var buffers: Range<Int> = 0..<0
+        /// Output frames played as silence because the stream was not there yet: the delay is too short for it.
+        public let missed = Atomic<Int>(0)
+        // Set at start: its own IO proc, playback and one cycle of its sound (every output but the main).
+        fileprivate var procID: AudioDeviceIOProcID?
+        fileprivate var playhead: Playhead?
+        fileprivate var latency = 0.0
+        fileprivate var sound: UnsafeMutablePointer<Float>?
         fileprivate var lastGain: Float = 1
 
         public init(device: OutputDevice) { self.device = device }
+        deinit { sound?.deallocate() }
     }
 
-    /// outputs[0] is the main output: its clock drives the engine and `anchor` refers to it.
+    /// outputs[0] is the main output: its clock drives the engine and `anchor` refers to it. The
+    /// main output's latency is the engine's latency; the others follow it on their own devices.
     public let outputs: [Output]
     public let sampleRate: Double
     public let delayFrames: Int
@@ -51,7 +61,7 @@ public final class Engine: @unchecked Sendable {
     public let anchor = SeqLock<Anchor?>(nil)
     /// Linear gain on the stream, before every output of this Mac (and the network).
     public let mainGain = AtomicFloat(1)
-    /// Frames from the output callback to the ear, as reported by CoreAudio for the aggregate (main output first).
+    /// Frames from the output callback to the ear on the main output, as reported by CoreAudio.
     public private(set) var outputLatencyFrames: UInt32 = 0
     /// Extra correction (seconds) for a main output that reports its latency wrongly.
     public let latencyTrim = AtomicFloat(0)
@@ -62,17 +72,12 @@ public final class Engine: @unchecked Sendable {
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
 
-    // Delay line, touched only by the IO thread after start.
-    private let delayCapacity: Int
-    private let delayMask: Int
-    private let delayLine: UnsafeMutablePointer<Float>
+    // Main IO thread only, after start.
     private var framesProcessed: Int = 0
     private var lastMainGain: Float = 1
-    /// One cycle of the input, interleaved stereo.
+    /// One cycle of the stream, interleaved stereo.
     private let scratch: UnsafeMutablePointer<Float>
     private static let maxFrames = 16_384
-    /// Lags beyond this are not supported (the delay line holds D plus this much).
-    private static let maxLagSeconds = 1.0
 
     private let pendingClick = Atomic<Int>(-1)
     private let click: [Float]
@@ -86,19 +91,12 @@ public final class Engine: @unchecked Sendable {
         receiver?.prepare(outputRate: sampleRate, sourceRate: sourceRate > 0 ? sourceRate : sampleRate)
         scratch = .allocate(capacity: Self.maxFrames * 2)
         delayFrames = Int((delaySeconds * sampleRate).rounded())
-        var c = 1
-        while c < delayFrames + Int(Self.maxLagSeconds * sampleRate) + 8192 { c <<= 1 }
-        delayCapacity = c
-        delayMask = c - 1
-        delayLine = .allocate(capacity: c * 2)
-        delayLine.initialize(repeating: 0, count: c * 2)
-        ring = FrameRing(capacityFrames: Int(sampleRate * 4))
+        ring = FrameRing(capacityFrames: Int(sampleRate * 4) + delayFrames)
         click = AcousticProbe.clickWaveform(sampleRate: sampleRate).map { $0 * 0.3 }
     }
 
     deinit {
         stop()
-        delayLine.deallocate()
         scratch.deallocate()
     }
 
@@ -113,27 +111,28 @@ public final class Engine: @unchecked Sendable {
             kAudioAggregateDeviceMainSubDeviceKey: main.uid,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
-            kAudioAggregateDeviceSubDeviceListKey: outputs.map { output -> [String: Any] in
-                [kAudioSubDeviceUIDKey: output.device.uid, kAudioSubDeviceDriftCompensationKey: output.device.uid != main.uid]
-            },
+            kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: main.uid]],
         ]
         if let tap {
             description[kAudioAggregateDeviceTapListKey] = [[kAudioSubTapUIDKey: tap.uuid.uuidString, kAudioSubTapDriftCompensationKey: true]]
         }
         do {
             try check(AudioHardwareCreateAggregateDevice(description as CFDictionary, &aggregateID), "create aggregate device")
-            // The aggregate lists each sub-device's output buffers in sub-device order.
-            var next = 0
-            for output in outputs {
-                let count = CA.bufferCount(output.device.id, kAudioObjectPropertyScopeOutput)
-                output.buffers = next..<(next + count)
-                next += count
-            }
             outputLatencyFrames = Self.outputLatency(of: aggregateID)
             try check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, nil) { [unowned self] _, input, _, output, outputTime in
                 self.render(input: input, output: output, outputTime: outputTime)
             }, "create IO proc")
             try check(AudioDeviceStart(aggregateID, procID), "start aggregate device")
+            for output in outputs.dropFirst() {
+                let rate = output.device.nominalSampleRate
+                output.playhead = Playhead(ratio: sampleRate / rate)
+                output.latency = output.device.outputLatency
+                output.sound = .allocate(capacity: Self.maxFrames * 2)
+                try check(AudioDeviceCreateIOProcIDWithBlock(&output.procID, output.device.id, nil) { [unowned self, unowned output] _, _, _, buffers, outputTime in
+                    self.follow(output, rate: rate, output: buffers, outputTime: outputTime)
+                }, "create IO proc for \(output.device.name)")
+                try check(AudioDeviceStart(output.device.id, output.procID), "start \(output.device.name)")
+            }
         } catch {
             stop()
             throw error
@@ -141,6 +140,12 @@ public final class Engine: @unchecked Sendable {
     }
 
     public func stop() {
+        for output in outputs.dropFirst() {
+            guard let procID = output.procID else { continue }
+            AudioDeviceStop(output.device.id, procID)
+            AudioDeviceDestroyIOProcID(output.device.id, procID)
+            output.procID = nil
+        }
         if let procID {
             AudioDeviceStop(aggregateID, procID)
             AudioDeviceDestroyIOProcID(aggregateID, procID)
@@ -154,6 +159,14 @@ public final class Engine: @unchecked Sendable {
             AudioHardwareDestroyProcessTap(tapID)
             tapID = AudioObjectID(kAudioObjectUnknown)
         }
+    }
+
+    /// Seconds an output needs the stream before the main output plays it: it is heard `lag` after the
+    /// latency its device reports, and it reads one of its cycles (plus margin) ahead of the newest frame.
+    public static func lead(of device: OutputDevice, lag: Double, main: OutputDevice) -> Double {
+        guard device != main else { return 0 }
+        let cycle = Double(max(512, device.bufferFrames)) / device.nominalSampleRate
+        return max(0, device.outputLatency + lag - main.outputLatency + cycle + 0.005)
     }
 
     /// Host time (seconds) at which stream frame `frame` is heard on the main output.
@@ -206,40 +219,30 @@ public final class Engine: @unchecked Sendable {
             ? HostClock.seconds(ts.mHostTime) + (Double(outputLatencyFrames) + Double(delayFrames)) / sampleRate + Double(latencyTrim.value)
             : nil
 
-        // 1. Input x main gain (+ calibration click) -> delay line at framesProcessed, and -> ring.
+        // 1. Input x main gain (+ calibration click) -> ring at framesProcessed.
         if let receiver {
             receiver.render(frames: frames, heardAt: heardAt, into: scratch)
         } else {
             readTap(UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input)), frames: frames)
         }
-        copyScratch(frames: frames, to: start)
+        applyMainGain(frames: frames)
         addPendingClick(start: start, frames: frames)
-        var written = 0
-        while written < frames {
-            let pos = (start + written) & delayMask
-            let n = min(frames - written, delayCapacity - pos)
-            ring.write(delayLine + pos * 2, frames: n)
-            written += n
-        }
-
-        // 2. Delay line -> each output, D frames behind minus its lag, with a gain ramp.
-        for out in outputs where !out.buffers.isEmpty && out.buffers.upperBound <= buffers.count {
-            let target = out.gain.value
-            let step = (target - out.lastGain) / Float(frames)
-            var gain = out.lastGain
-            let lagFrames = Int((Double(out.lag.value) * sampleRate).rounded())
-            let readStart = start - delayFrames + max(-Int(Self.maxLagSeconds * sampleRate), min(delayFrames, lagFrames))
-            for i in 0..<frames {
-                gain += step
-                let x = readStart + i
-                let p = (x & delayMask) * 2
-                let l = x >= 0 ? delayLine[p] * gain : 0
-                let r = x >= 0 ? delayLine[p + 1] * gain : 0
-                write(buffers, out.buffers, frame: i, left: l, right: r)
-            }
-            out.lastGain = target
-        }
+        ring.write(scratch, frames: frames)
         framesProcessed = start + frames
+
+        // 2. Ring -> main output, D frames behind, with a gain ramp.
+        if !ring.read(at: start - delayFrames, frames: frames, into: scratch) {
+            scratch.update(repeating: 0, count: frames * 2)
+        }
+        let main = outputs[0]
+        let target = main.gain.value
+        let step = (target - main.lastGain) / Float(frames)
+        var gain = main.lastGain
+        for i in 0..<frames {
+            gain += step
+            write(buffers, frame: i, left: scratch[2 * i] * gain, right: scratch[2 * i + 1] * gain)
+        }
+        main.lastGain = target
 
         // 3. Timeline.
         if let heardAt { anchor.store(Anchor(frame: start, time: heardAt)) }
@@ -261,17 +264,15 @@ public final class Engine: @unchecked Sendable {
         if n < frames { (scratch + 2 * n).update(repeating: 0, count: 2 * (frames - n)) }
     }
 
-    /// Copies `scratch`, times the main gain, into the delay line.
-    private func copyScratch(frames: Int, to start: Int) {
+    /// Multiplies `scratch` by the main gain.
+    private func applyMainGain(frames: Int) {
         let target = mainGain.value
         let step = (target - lastMainGain) / Float(frames)
         var gain = lastMainGain
         lastMainGain = target
-        for i in 0..<frames {
-            gain += step
-            let p = ((start + i) & delayMask) * 2
-            delayLine[p] = scratch[2 * i] * gain
-            delayLine[p + 1] = scratch[2 * i + 1] * gain
+        for i in 0..<2 * frames {
+            if i & 1 == 0 { gain += step }
+            scratch[i] *= gain
         }
     }
 
@@ -279,28 +280,55 @@ public final class Engine: @unchecked Sendable {
         let at = pendingClick.load(ordering: .acquiring)
         guard at >= 0, at < start + frames else { return }
         for k in 0..<click.count where at + k >= start && at + k < start + frames {
-            let p = ((at + k) & delayMask) * 2
-            delayLine[p] += click[k]
-            delayLine[p + 1] += click[k]
+            let p = (at + k - start) * 2
+            scratch[p] += click[k]
+            scratch[p + 1] += click[k]
         }
         if at + click.count <= start + frames {
             _ = pendingClick.compareExchange(expected: at, desired: -1, ordering: .acquiringAndReleasing)
         }
     }
 
+    /// One cycle of an output other than the main one: it plays the frame the main output plays at the
+    /// moment this output is heard, following the anchor on its own clock.
+    private func follow(_ out: Output, rate: Double, output: UnsafeMutablePointer<AudioBufferList>, outputTime: UnsafePointer<AudioTimeStamp>) {
+        let buffers = UnsafeMutableAudioBufferListPointer(output)
+        guard let first = buffers.first, first.mNumberChannels > 0, let playhead = out.playhead, let sound = out.sound else { return }
+        let frames = min(Self.maxFrames, Int(first.mDataByteSize) / (MemoryLayout<Float>.size * Int(first.mNumberChannels)))
+        if frames == 0 { return }
+        let ts = outputTime.pointee
+        if ts.mFlags.contains(.hostTimeValid), let a = anchor.load() {
+            let heardAt = HostClock.seconds(ts.mHostTime) + out.latency + Double(out.lag.value)
+            let target = Double(a.frame) + (heardAt - a.time) * sampleRate
+            let ring = ring
+            var late = 0
+            _ = playhead.render(target: target, rate: sampleRate, nominal: sampleRate / rate, frames: frames, gain: out.gain.value,
+                                into: sound) { first, count, into in
+                if ring.read(at: first, frames: count, into: into) { return 0 }
+                into.update(repeating: 0, count: count * 2)
+                if first >= 0, first + count > ring.writeIndex { late = count }
+                return count
+            }
+            if late > 0 { out.missed.add(frames, ordering: .relaxed) }
+        } else {
+            sound.update(repeating: 0, count: frames * 2)
+            playhead.reset()
+        }
+        for i in 0..<frames { write(buffers, frame: i, left: sound[2 * i], right: sound[2 * i + 1]) }
+    }
+
     /// Writes one stereo frame into a device's buffers (first two channels; the rest stay silent).
     @inline(__always)
-    private func write(_ buffers: UnsafeMutableAudioBufferListPointer, _ range: Range<Int>, frame: Int, left: Float, right: Float) {
-        let b = range.lowerBound
-        let channels = Int(buffers[b].mNumberChannels)
-        guard let data = buffers[b].mData?.assumingMemoryBound(to: Float.self) else { return }
+    private func write(_ buffers: UnsafeMutableAudioBufferListPointer, frame: Int, left: Float, right: Float) {
+        let channels = Int(buffers[0].mNumberChannels)
+        guard let data = buffers[0].mData?.assumingMemoryBound(to: Float.self) else { return }
         if channels >= 2 {
             data[frame * channels] = left
             data[frame * channels + 1] = right
             for c in 2..<channels { data[frame * channels + c] = 0 }
         } else {
             data[frame] = left
-            if range.count > 1 { buffers[b + 1].mData?.assumingMemoryBound(to: Float.self)[frame] = right }
+            if buffers.count > 1 { buffers[1].mData?.assumingMemoryBound(to: Float.self)[frame] = right }
         }
     }
 }
