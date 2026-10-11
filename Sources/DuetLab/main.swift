@@ -29,7 +29,7 @@ switch args.first {
 case "devices":
     let def = OutputDevice.defaultOutput()
     for d in OutputDevice.all() {
-        print("\(d.id)\t\(d.name)\tuid=\(d.uid)\trate=\(d.nominalSampleRate)\tlatency=\(d.outputLatencyFrames)\tpersonal=\(d.isPersonal)\(d.id == def?.id ? "\tDEFAULT" : "")")
+        print("\(d.id)\t\(d.name)\tuid=\(d.uid)\trate=\(d.nominalSampleRate)\tlatency=\(d.outputLatencyFrames)\tbluetooth=\(d.isBluetooth)\(d.id == def?.id ? "\tDEFAULT" : "")")
     }
 
 case "probe":

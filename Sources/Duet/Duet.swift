@@ -14,8 +14,8 @@ import os
 /// its output is headphones. Turning Duet on on one Mac turns it off on the other (the later switch
 /// wins). While one Mac plays the other's sound, both Macs have one volume: the volume keys, Control
 /// Center or the menu on either Mac set it, mute included; each output also has its own share of it,
-/// set on its Mac. The other Mac's menu and media keys control the music: play/pause, tracks. Headphones as a Mac's output put it on standby (private
-/// listening). The microphone tune on either Mac aligns its outputs, then the other Mac, as heard there. The capture runs only while some app plays sound, and for a while after, because
+/// set on its Mac. The other Mac's menu and media keys control the music: play/pause, tracks. A Bluetooth output puts a Mac on standby (headphones: private
+/// listening) unless it is ticked as a speaker; the slowest ticked output sets the delay. The microphone tune on either Mac aligns its outputs, then the other Mac, as heard there. The capture runs only while some app plays sound, and for a while after, because
 /// running audio keeps the Mac from sleeping.
 @MainActor @Observable
 final class Duet {
@@ -189,10 +189,11 @@ final class Duet {
 
     /// Brings the engine and the link in line with the settings, the devices and the other Mac.
     func update() {
-        outputs = OutputDevice.all().filter { !$0.isPersonal }
+        outputs = OutputDevice.all()
         watchMainVolume()
         mainVolume = Double(mainVolumeControl?.position ?? 1)
-        let headphones = OutputDevice.defaultOutput()?.isPersonal ?? false
+        let system = OutputDevice.defaultOutput()
+        let headphones = system.flatMap { $0.isBluetooth && !chosenOutputs.contains($0.uid) ? $0 : nil }
         let session = link.session
         let peer = session == nil ? nil : self.peer
         if isOn, let peer, let session, peer.on, (peer.since, session.peer.id) > (since, link.me.id) {
@@ -200,12 +201,16 @@ final class Duet {
             return
         }
         let main = outputs.first(where: \.isBuiltIn) ?? outputs.first
+        if let system, let main, system.isBluetooth, headphones == nil, system != main, isOn || peer?.on == true {
+            // A ticked Bluetooth speaker plays through Ensemble; the Mac's own output and volume stay on its speakers.
+            try? OutputDevice.setDefaultOutput(main)
+        }
         // The built-in speakers always drive the timing, silent if not ticked.
         let devices = [main].compactMap { $0 } + outputs.filter { $0.uid != main?.uid && chosenOutputs.contains($0.uid) }
-        let localLead = devices.map { max(0, lags[$0.uid] ?? 0) }.max() ?? 0
+        let localLead = devices.map { max(0, lag($0, main: main)) }.max() ?? 0
         let wanted = monitor.isPlaying || hold != nil || isTuning
         var desired: Config?
-        if !devices.isEmpty, !headphones {
+        if !devices.isEmpty, headphones == nil {
             if isOn, wanted {
                 let delay = peer?.canPlay == true ? max(localLead, Self.networkDelay + (peer?.lead ?? 0)) : localLead
                 desired = Config(outputs: devices.map(\.uid), delay: delay, input: .capture)
@@ -222,8 +227,8 @@ final class Duet {
             + (peer?.canPlay == true ? [peerName] : []))
         if isReceiving {
             status = "Playing the sound of \(peerName)"
-        } else if headphones && (isOn || peer?.on == true) {
-            status = "Standby: headphones are this Mac's output"
+        } else if let headphones, isOn || peer?.on == true {
+            status = "Standby: \(headphones.name) counts as headphones. Tick it to use it as a speaker"
         } else if !isOn {
             status = "Off"
         } else if names.isEmpty {
@@ -242,7 +247,7 @@ final class Duet {
         shareVolume()
         applyVolumes()
         updateNowPlaying()
-        sendState(canPlay: !isOn && !headphones && !devices.isEmpty, lead: localLead + trim)
+        sendState(canPlay: !isOn && headphones == nil && !devices.isEmpty, lead: localLead + trim)
     }
 
     private func otherMacText(peer: PeerState?, session: Link.Session?) -> String {
@@ -258,6 +263,11 @@ final class Duet {
         if peer.on { return "\(name) shares its sound." }
         if isOn { return peer.canPlay ? "\(name) plays along." : "\(name) is on headphones." }
         return "\(name) is ready."
+    }
+
+    /// Seconds an output is heard after the main output: measured by the tune, else what the devices report.
+    private func lag(_ device: OutputDevice, main: OutputDevice?) -> Double {
+        lags[device.uid] ?? max(0, device.outputLatency - (main?.outputLatency ?? 0))
     }
 
     private func restart(_ config: Config?) {
@@ -287,7 +297,7 @@ final class Duet {
             input = .network(receiver)
         }
         let engine = Engine(input: input, outputs: devices, delaySeconds: config.delay)
-        for output in engine.outputs { output.lag.value = Float(lags[output.device.uid] ?? 0) }
+        for output in engine.outputs { output.lag.value = Float(lag(output.device, main: devices.first)) }
         engine.latencyTrim.value = Float(trim)
         do {
             try engine.start()

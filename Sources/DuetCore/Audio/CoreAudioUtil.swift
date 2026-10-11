@@ -130,8 +130,8 @@ public struct OutputDevice: Hashable, Identifiable, Sendable {
     public let name: String
     public let transport: UInt32
 
-    /// Headphones and earbuds: private listening, where playing on both Macs makes no sense.
-    public var isPersonal: Bool {
+    /// Bluetooth: headphones (private listening) unless the user ticks it in the menu as a speaker.
+    public var isBluetooth: Bool {
         transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
     }
 
@@ -182,6 +182,9 @@ public struct OutputDevice: Hashable, Identifiable, Sendable {
         let stream = streams.first.flatMap { try? CA.scalar($0, kAudioStreamPropertyLatency, as: UInt32.self) } ?? 0
         return device + stream
     }
+
+    /// Seconds between handing a frame to the device and hearing it, as the device reports.
+    public var outputLatency: Double { Double(outputLatencyFrames) / nominalSampleRate }
 }
 
 /// The Mac's built-in microphone, if it has one.
