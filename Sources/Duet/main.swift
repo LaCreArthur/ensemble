@@ -1,0 +1,2 @@
+import DuetCore
+print("Duet")
