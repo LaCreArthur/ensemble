@@ -85,6 +85,17 @@ enum CA {
         return list.reduce(0) { $0 + Int($1.mNumberChannels) }
     }
 
+    /// Number of buffers (streams) a device uses in the given scope.
+    static func bufferCount(_ id: AudioObjectID, _ scope: AudioObjectPropertyScope) -> Int {
+        var addr = address(kAudioDevicePropertyStreamConfiguration, scope)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else { return 0 }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, raw) == noErr else { return 0 }
+        return Int(raw.assumingMemoryBound(to: AudioBufferList.self).pointee.mNumberBuffers)
+    }
+
     static func fourCC(_ v: UInt32) -> String {
         let bytes = [24, 16, 8, 0].map { UInt8((v >> UInt32($0)) & 0xff) }
         return String(bytes: bytes, encoding: .ascii) ?? String(v)
@@ -123,6 +134,9 @@ public struct OutputDevice: Hashable, Identifiable, Sendable {
     public var isPersonal: Bool {
         transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
     }
+
+    /// The Mac's own speakers.
+    public var isBuiltIn: Bool { transport == kAudioDeviceTransportTypeBuiltIn }
 
     public static func all() -> [OutputDevice] {
         let ids = (try? CA.array(CA.system, kAudioHardwarePropertyDevices, as: AudioObjectID.self)) ?? []
@@ -167,6 +181,14 @@ public struct OutputDevice: Hashable, Identifiable, Sendable {
         let streams = (try? CA.array(id, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput, as: AudioObjectID.self)) ?? []
         let stream = streams.first.flatMap { try? CA.scalar($0, kAudioStreamPropertyLatency, as: UInt32.self) } ?? 0
         return device + stream
+    }
+}
+
+/// The Mac's built-in microphone, if it has one.
+public func builtInMicrophone() -> AudioObjectID? {
+    OutputDevice.allDeviceIDs().first { id in
+        CA.channelCount(id, kAudioObjectPropertyScopeInput) > 0
+            && (try? CA.scalar(id, kAudioDevicePropertyTransportType, as: UInt32.self)) == kAudioDeviceTransportTypeBuiltIn
     }
 }
 
