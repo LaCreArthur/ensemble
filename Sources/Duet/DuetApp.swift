@@ -39,7 +39,7 @@ struct DuetMenu: View {
             }
 
             Divider()
-            volumeRow("Main volume", value: $duet.shownMainVolume)
+            volumeRow("Volume", value: $duet.mainVolume)
 
             Text("This Mac").font(.subheadline.bold())
             ForEach(duet.outputs) { output in

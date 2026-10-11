@@ -16,7 +16,8 @@ public struct SystemVolume: Sendable {
     }
 
     public var isMuted: Bool {
-        ((try? CA.scalar(device, kAudioDevicePropertyMute, kAudioObjectPropertyScopeOutput, as: UInt32.self)) ?? 0) != 0
+        get { ((try? CA.scalar(device, kAudioDevicePropertyMute, kAudioObjectPropertyScopeOutput, as: UInt32.self)) ?? 0) != 0 }
+        nonmutating set { try? CA.setScalar(device, kAudioDevicePropertyMute, UInt32(newValue ? 1 : 0), kAudioObjectPropertyScopeOutput) }
     }
 
     /// The linear gain the device applies now (0 when muted), to give other outputs the same loudness change.

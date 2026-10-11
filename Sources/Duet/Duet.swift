@@ -12,9 +12,9 @@ import os
 /// Rules: Duet runs on both Macs. The Mac where Duet is on shares its sound: every app's sound plays
 /// on its ticked outputs and on the other Mac, all heard together; the other Mac plays along unless
 /// its output is headphones. Turning Duet on on one Mac turns it off on the other (the later switch
-/// wins). The sharing Mac's own volume (keys, Control Center) is the main volume of both Macs; each
-/// output also has its own volume, set on its Mac. The other Mac's menu and media keys control the
-/// music: play/pause, tracks, main volume. Headphones as a Mac's output put it on standby (private
+/// wins). While one Mac plays the other's sound, both Macs have one volume: the volume keys, Control
+/// Center or the menu on either Mac set it, mute included; each output also has its own share of it,
+/// set on its Mac. The other Mac's menu and media keys control the music: play/pause, tracks. Headphones as a Mac's output put it on standby (private
 /// listening). The capture runs only while some app plays sound, and for a while after, because
 /// running audio keeps the Mac from sleeping.
 @MainActor @Observable
@@ -54,7 +54,7 @@ final class Duet {
     private(set) var otherMacStatus = ""
     private(set) var isPlaying = false
     private(set) var isTuning = false
-    /// This Mac's own volume (0...1); setting it sets the Mac's volume.
+    /// This Mac's own volume (0...1), the volume of both Macs while one plays the other's sound; setting it sets the Mac's volume.
     var mainVolume: Double = 1 { didSet { if abs(Double(mainVolumeControl?.position ?? 1) - mainVolume) > 0.001 { mainVolumeControl?.position = Float(mainVolume) } } }
     /// What the other Mac last said about itself; nil without a session.
     private(set) var peer: PeerState?
@@ -63,13 +63,14 @@ final class Duet {
 
     struct PeerState: Equatable {
         /// `stream`: the Bonjour name of its sound stream, empty while it sends none.
-        var on: Bool, since: Double, stream: String, playing: Bool, volume: Double, canPlay: Bool, lead: Double
+        var on: Bool, since: Double, stream: String, playing: Bool, volume: Double, muted: Bool, canPlay: Bool, lead: Double
         init(_ m: [String: Any]) {
             on = m["on"] as? Bool ?? false
             since = m["since"] as? Double ?? 0
             stream = m["stream"] as? String ?? ""
             playing = m["playing"] as? Bool ?? false
             volume = m["volume"] as? Double ?? 1
+            muted = m["muted"] as? Bool ?? false
             canPlay = m["canPlay"] as? Bool ?? false
             lead = m["lead"] as? Double ?? 0
         }
@@ -100,6 +101,8 @@ final class Duet {
     /// The last state sent to the other Mac, and in which session.
     private var sentState: (state: [String: AnyHashable], session: ObjectIdentifier)?
     private var remoteCommands: [(MPRemoteCommand, Any)] = []
+    /// The volume both Macs last agreed on while this Mac plays the other's sound.
+    private var sharedVolume: (volume: Double, muted: Bool)?
     private let log = Logger(subsystem: "com.lacrearthur.duet", category: "audio")
     /// Logs the stream's health while this Mac plays the other Mac's sound.
     private var healthTimer: Timer?
@@ -158,16 +161,6 @@ final class Duet {
     func volume(_ key: String) -> Double { volumes[key] ?? 1 }
     func setVolume(_ key: String, _ value: Double) { volumes[key] = value }
 
-    /// The main volume as the menu shows it: the sharing Mac's while this Mac plays its sound.
-    var shownMainVolume: Double {
-        get { isReceiving ? peer?.volume ?? 1 : mainVolume }
-        set {
-            guard isReceiving else { return mainVolume = newValue }
-            peer?.volume = newValue
-            link.send(["t": "volume", "value": newValue])
-        }
-    }
-
     /// Play/pause and tracks on the sharing Mac, from this Mac's menu or media keys.
     func control(_ command: MediaCommand) { link.send(["t": "media", "cmd": command.rawValue]) }
 
@@ -225,6 +218,7 @@ final class Duet {
         }
         isPlaying = engine != nil
         otherMacStatus = otherMacText(peer: peer, session: session)
+        shareVolume()
         applyVolumes()
         updateNowPlaying()
         sendState(canPlay: !isOn && !headphones && !devices.isEmpty, lead: localLead)
@@ -330,7 +324,7 @@ final class Duet {
         guard let session = link.session else { return sentState = nil }
         let state: [String: AnyHashable] = [
             "t": "state", "on": isOn, "since": since, "stream": sender?.name ?? "", "playing": monitor.isPlaying,
-            "volume": mainVolume, "canPlay": canPlay, "lead": lead,
+            "volume": mainVolume, "muted": mainVolumeControl?.isMuted ?? false, "canPlay": canPlay, "lead": lead,
         ]
         let id = ObjectIdentifier(session.crypto)
         guard sentState?.state != state || sentState?.session != id else { return }
@@ -346,7 +340,9 @@ final class Duet {
         case "media":
             if isOn, let command = (message["cmd"] as? String).flatMap(MediaCommand.init(rawValue:)) { command.perform() }
         case "volume":
-            if isOn, let value = message["value"] as? Double { mainVolume = max(0, min(1, value)) }
+            guard isOn, let value = message["value"] as? Double else { break }
+            mainVolume = max(0, min(1, value))
+            if let muted = message["muted"] as? Bool { mainVolumeControl?.isMuted = muted }
         default:
             break
         }
@@ -383,6 +379,23 @@ final class Duet {
 
     // MARK: Volume
 
+    /// One volume while this Mac plays the other's sound: a change there shows here, and a change
+    /// here (keys, Control Center, menu) goes there.
+    private func shareVolume() {
+        guard isReceiving, let peer, let control = mainVolumeControl else { return sharedVolume = nil }
+        let mine = (volume: mainVolume, muted: control.isMuted)
+        if sharedVolume?.volume != peer.volume || sharedVolume?.muted != peer.muted {
+            sharedVolume = (peer.volume, peer.muted)
+            mainVolume = peer.volume
+            if mine.muted != peer.muted { control.isMuted = peer.muted }
+        } else if abs(mine.volume - peer.volume) > 0.01 || mine.muted != peer.muted {
+            sharedVolume = mine
+            self.peer?.volume = mine.volume
+            self.peer?.muted = mine.muted
+            link.send(["t": "volume", "value": mine.volume, "muted": mine.muted])
+        }
+    }
+
     private func watchMainVolume() {
         let device = outputs.first(where: \.isBuiltIn)?.id
         guard device != mainVolumeControl?.device else { return }
@@ -390,8 +403,8 @@ final class Duet {
         volumeObservers = mainVolumeControl?.observe { [weak self] in MainActor.assumeIsolated { self?.update() } } ?? []
     }
 
-    /// The main output's device applies this Mac's volume itself; the others get it as gain, and so
-    /// does the other Mac while it plays this Mac's sound.
+    /// The main output's device applies this Mac's volume itself; the others get it as gain. The other
+    /// Mac applies the same volume itself (see `shareVolume`).
     private func applyVolumes() {
         guard let engine else { return }
         let main = mainVolumeControl
@@ -401,7 +414,7 @@ final class Duet {
             output.gain.value = chosenOutputs.contains(uid) ? own * own * (i == 0 ? 1 : main?.gain ?? 1) : 0
         }
         // Silent there while tuning: the clicks are for this Mac's microphone.
-        sender?.gain.value = isTuning ? 0 : main?.gain ?? 1
+        sender?.gain.value = isTuning ? 0 : 1
     }
 
     // MARK: Sync tuning
