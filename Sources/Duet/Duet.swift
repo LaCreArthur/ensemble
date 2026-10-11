@@ -107,8 +107,9 @@ final class Duet {
     private var activity: NSObjectProtocol? { didSet { if let oldValue { ProcessInfo.processInfo.endActivity(oldValue) } } }
 
     /// Lead time the other Mac gets: the sound is delayed this much here while it plays there. With the
-    /// first copy of both routes, 99.9% of packets come within 17 ms and the worst seen in 20 min was 90 ms.
-    static let networkDelay = 0.1
+    /// first copy of both routes, 99.9% of packets come within 17 ms, but while Universal Control rebuilds
+    /// its direct link (every few minutes when idle) both routes stall up to about 150 ms.
+    static let networkDelay = 0.15
     static let holdTime: TimeInterval = 300
 
     init() {
