@@ -1,10 +1,16 @@
 import CryptoKit
 import Foundation
 import Network
+import os
 
 /// The control link to the other Mac running Duet. It finds the other Mac on the local network
 /// (Bonjour), pairs with it once, and then keeps an encrypted session with it: small JSON messages
 /// over TCP, plus the keys of the sound stream (UDP). One paired Mac at a time. Main queue only.
+///
+/// Where the network keeps the Macs apart (or there is none), they find each other over the direct
+/// Mac-to-Mac link, as AirDrop does. That link slows the Mac's Wi-Fi while it is on, so each Mac uses
+/// it only while it looks for the other one: from `directAfter` without a session until `directFor`
+/// after it started, woke or lost its session, and for the life of a session that needed it.
 ///
 /// Pairing (numeric comparison, as in Bluetooth): the Mac where the user clicks Pair (I) and the
 /// other (R) exchange X25519 keys; R commits to its nonce before I reveals its own, so a machine in
@@ -61,12 +67,19 @@ public final class Link {
     public var confirm: (_ peer: Peer, _ code: String, _ reply: @escaping (Bool) -> Void) -> Void = { _, _, reply in reply(false) }
 
     private static let type = "_duet._tcp"
+    /// How long the Macs try the network alone before they also use the direct link, and how long they then look.
+    private static let directAfter: TimeInterval = 10, directFor: TimeInterval = 600
     private var listener: NWListener?
     private var browser: NWBrowser?
     private var endpoints: [String: NWEndpoint] = [:]
     private var channels: [Channel] = []
     private weak var sessionChannel: Channel?
     private var timer: Timer?
+    /// The listener and the browser use the direct link too.
+    private var direct = false
+    /// Since when this Mac looks for the other one (start, wake, end of a session).
+    private var lookingSince = Date()
+    private let log = Logger(subsystem: "com.lacrearthur.duet", category: "link")
 
     public init(me: Peer, pairing: Pairing?) {
         self.me = me
@@ -74,22 +87,23 @@ public final class Link {
     }
 
     public func start() {
-        listen()
-        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: Self.type, domain: nil), using: Self.parameters())
-        browser.browseResultsChangedHandler = { [weak self] results, _ in
-            MainActor.assumeIsolated { self?.found(results) }
-        }
-        browser.start(queue: .main)
-        self.browser = browser
+        discover()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.reconcile() }
         }
     }
 
+    /// Looks for the other Mac again if this Mac stopped looking: on wake, or when the user opens the menu.
+    public func lookAgain() {
+        guard session == nil, -lookingSince.timeIntervalSinceNow >= Self.directFor else { return }
+        lookingSince = Date()
+        updateDirect()
+    }
+
     /// Starts pairing with a Duet found on the network; both Macs then ask their user to confirm.
     public func pair(with peer: Peer) {
         guard let endpoint = endpoints[peer.id], !channels.contains(where: { $0.exchange != nil }) else { return }
-        let channel = Channel(NWConnection(to: endpoint, using: Self.parameters()), initiator: true)
+        let channel = Channel(NWConnection(to: endpoint, using: Self.parameters(direct: direct)), initiator: true)
         channel.peer = peer
         channel.exchange = Exchange()
         note = "Pairing with \(peer.name)…"
@@ -103,18 +117,33 @@ public final class Link {
     // MARK: Network
 
     /// TCP; keepalive notices a vanished Mac within about 5 s.
-    private static func parameters() -> NWParameters {
+    private static func parameters(direct: Bool) -> NWParameters {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         tcp.enableKeepalive = true
         tcp.keepaliveIdle = 2
         tcp.keepaliveInterval = 1
         tcp.keepaliveCount = 3
-        return NWParameters(tls: nil, tcp: tcp)
+        let parameters = NWParameters(tls: nil, tcp: tcp)
+        parameters.includePeerToPeer = direct
+        return parameters
+    }
+
+    /// (Re)starts the listener and the browser, on the direct link too if `direct`.
+    private func discover() {
+        listener?.cancel()
+        browser?.cancel()
+        listen()
+        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: Self.type, domain: nil), using: Self.parameters(direct: direct))
+        browser.browseResultsChangedHandler = { [weak self, weak browser] results, _ in
+            MainActor.assumeIsolated { if let self, browser === self.browser { self.found(results) } }
+        }
+        browser.start(queue: .main)
+        self.browser = browser
     }
 
     private func listen() {
-        guard let listener = try? NWListener(using: Self.parameters()) else { return }
+        guard let listener = try? NWListener(using: Self.parameters(direct: direct)) else { return }
         listener.service = NWListener.Service(name: me.name, type: Self.type, txtRecord: NWTXTRecord(["id": me.id]))
         listener.newConnectionHandler = { [weak self] connection in
             MainActor.assumeIsolated { self?.add(Channel(connection, initiator: false)) }
@@ -122,12 +151,25 @@ public final class Link {
         listener.stateUpdateHandler = { [weak self, weak listener] state in
             guard case .failed = state else { return }
             MainActor.assumeIsolated {
-                listener?.cancel()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { MainActor.assumeIsolated { self?.listen() } }
+                guard let listener, listener === self?.listener else { return }
+                listener.cancel()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    MainActor.assumeIsolated { if let self, listener === self.listener { self.listen() } }
+                }
             }
         }
         listener.start(queue: .main)
         self.listener = listener
+    }
+
+    /// Turns the direct link on or off for the listener and the browser (see the type's notes).
+    private func updateDirect() {
+        let looking = -lookingSince.timeIntervalSinceNow
+        let wanted = session == nil ? looking >= Self.directAfter && looking < Self.directFor : sessionChannel?.direct == true
+        guard wanted != direct else { return }
+        direct = wanted
+        log.notice("direct link \(wanted ? "on" : "off", privacy: .public)")
+        discover()
     }
 
     private func found(_ results: Set<NWBrowser.Result>) {
@@ -147,9 +189,12 @@ public final class Link {
 
     /// Connects to the paired Mac when this Mac is the one that connects and nothing is under way.
     private func reconcile() {
+        updateDirect()
         guard let peer = pairing?.peer, !refused, session == nil, me.id < peer.id,
               !channels.contains(where: { $0.initiator || $0.authenticated }), let endpoint = endpoints[peer.id] else { return }
-        add(Channel(NWConnection(to: endpoint, using: Self.parameters()), initiator: true))
+        let channel = Channel(NWConnection(to: endpoint, using: Self.parameters(direct: direct)), initiator: true)
+        channel.direct = direct
+        add(channel)
     }
 
     private func add(_ channel: Channel) {
@@ -168,7 +213,11 @@ public final class Link {
         channels.removeAll { $0 === channel }
         if channel.exchange != nil, note?.hasPrefix("Pairing") == true { note = nil }
         if channel === sessionChannel || session != nil && sessionChannel == nil {
+            log.notice("session ended")
             session = nil
+            // After a session over the direct link, look over it again at once: the network did not do.
+            lookingSince = Date() - (channel.direct ? Self.directAfter : 0)
+            updateDirect()
             onChange()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in MainActor.assumeIsolated { self?.reconcile() } }
@@ -182,7 +231,7 @@ public final class Link {
             channel.send(["t": "pair", "id": me.id, "name": me.name, "pk": base64(exchange.publicKey)])
         } else {
             channel.nonce = randomBytes(16)
-            channel.send(["t": "hello", "id": me.id, "name": me.name, "n": base64(channel.nonce)])
+            channel.send(["t": "hello", "id": me.id, "name": me.name, "n": base64(channel.nonce), "d": channel.direct])
         }
     }
 
@@ -200,6 +249,9 @@ public final class Link {
             session = Session(peer: peer, crypto: crypto)
             refused = false
             if note != nil, channel.exchange == nil { note = nil }
+            let path = channel.connection.currentPath?.availableInterfaces.map(\.name).joined(separator: ",") ?? "?"
+            log.notice("session with \(peer.name, privacy: .public) over \(channel.direct ? "the direct link" : "the network", privacy: .public) (\(path, privacy: .public))")
+            updateDirect()
             onChange()
         case "unpaired":
             guard channel.initiator, channel.exchange == nil else { return channel.close() }
@@ -223,10 +275,13 @@ public final class Link {
         if channel.initiator {
             salt = channel.nonce + theirs
         } else {
+            channel.direct = direct
             channel.nonce = randomBytes(16)
-            channel.send(["t": "hello", "id": me.id, "name": me.name, "n": base64(channel.nonce)])
+            channel.send(["t": "hello", "id": me.id, "name": me.name, "n": base64(channel.nonce), "d": direct])
             salt = theirs + channel.nonce
         }
+        // A session counts as direct only if both Macs were looking over the direct link when it started.
+        channel.direct = channel.direct && message["d"] as? Bool == true
         let (out, back) = channel.initiator ? ("I>R", "R>I") : ("R>I", "I>R")
         channel.seal(send: Seal.derive(pairing.key, salt: salt, "duet tcp " + out),
                      receive: Seal.derive(pairing.key, salt: salt, "duet tcp " + back))
@@ -350,6 +405,8 @@ private final class Channel {
     var exchange: Link.Exchange?
     var udp: DatagramCrypto?
     var authenticated = false
+    /// Opened while this Mac looked over the direct link; for a session, while both did.
+    var direct = false
 
     private var keys: (send: SymmetricKey, receive: SymmetricKey)?
     private var sent: UInt64 = 0, received: UInt64 = 0

@@ -146,6 +146,10 @@ final class Duet {
         link.onMessage = { [weak self] in self?.received($0) }
         link.start()
         observers = DeviceEvents.observe { [weak self] in MainActor.assumeIsolated { self?.update() } }
+        // Waking up, or the user opening the menu, is a reason to look for the other Mac again.
+        let lookAgain: @Sendable (Notification) -> Void = { [weak self] _ in MainActor.assumeIsolated { self?.link.lookAgain() } }
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main, using: lookAgain))
+        observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main, using: lookAgain))
         monitor.onChange = { [weak self] _ in MainActor.assumeIsolated { self?.appsPlayingChanged() } }
         monitor.start()
         update()
@@ -233,7 +237,7 @@ final class Duet {
         }
         let name = pairing.peer.name
         guard session != nil, let peer else {
-            return link.nearby.contains { $0.id == pairing.peer.id } ? "Connecting to \(name)…" : "\(name) is not on the network."
+            return link.nearby.contains { $0.id == pairing.peer.id } ? "Connecting to \(name)…" : "Looking for \(name)…"
         }
         if peer.on { return "\(name) shares its sound." }
         if isOn { return peer.canPlay ? "\(name) plays along." : "\(name) is on headphones." }
