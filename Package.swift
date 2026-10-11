@@ -5,7 +5,7 @@ let package = Package(
     name: "Duet",
     platforms: [.macOS("26.0")],
     products: [
-        .executable(name: "Duet", targets: ["Duet"]),
+        .executable(name: "Ensemble", targets: ["Duet"]),
         .executable(name: "duet-lab", targets: ["DuetLab"]),
     ],
     targets: [

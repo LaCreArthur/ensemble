@@ -54,6 +54,8 @@ final class Duet {
     private(set) var otherMacStatus = ""
     private(set) var isPlaying = false
     private(set) var isTuning = false
+    /// Where the first use stands, for the guide.
+    private(set) var guide = Guide()
     /// This Mac's own volume (0...1), the volume of both Macs while one plays the other's sound; setting it sets the Mac's volume.
     var mainVolume: Double = 1 { didSet { if abs(Double(mainVolumeControl?.position ?? 1) - mainVolume) > 0.001 { mainVolumeControl?.position = Float(mainVolume) } } }
     /// What the other Mac last said about itself; nil without a session.
@@ -74,6 +76,11 @@ final class Duet {
             canPlay = m["canPlay"] as? Bool ?? false
             lead = m["lead"] as? Double ?? 0
         }
+    }
+
+    struct Guide: Equatable {
+        /// `denied`: not allowed on the local network; `playing`: sound plays on both Macs.
+        var denied = false, found = false, paired = false, playing = false
     }
 
     private enum Input: Equatable {
@@ -148,6 +155,7 @@ final class Duet {
         }
         link.onMessage = { [weak self] in self?.received($0) }
         link.start()
+        log.notice("started; open at login: \(SMAppService.mainApp.status == .enabled, privacy: .public)")
         observers = DeviceEvents.observe { [weak self] in MainActor.assumeIsolated { self?.update() } }
         // Waking up, or the user opening the menu, is a reason to look for the other Mac again.
         let lookAgain: @Sendable (Notification) -> Void = { [weak self] _ in MainActor.assumeIsolated { self?.link.lookAgain() } }
@@ -165,6 +173,10 @@ final class Duet {
     func control(_ command: MediaCommand) { link.send(["t": "media", "cmd": command.rawValue]) }
 
     func pair(with peer: Link.Peer) { link.pair(with: peer) }
+
+    static func openLocalNetworkSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork")!)
+    }
 
     // MARK: Rules
 
@@ -218,6 +230,8 @@ final class Duet {
         }
         isPlaying = engine != nil
         otherMacStatus = otherMacText(peer: peer, session: session)
+        guide = Guide(denied: link.denied, found: !link.nearby.isEmpty || session != nil, paired: link.pairing != nil,
+                      playing: isReceiving || engine != nil && peer?.canPlay == true)
         shareVolume()
         applyVolumes()
         updateNowPlaying()
@@ -225,9 +239,10 @@ final class Duet {
     }
 
     private func otherMacText(peer: PeerState?, session: Link.Session?) -> String {
+        if link.denied { return "macOS does not let Ensemble look for your other Mac: allow it in Local Network settings." }
         if let note = link.note { return note }
         guard let pairing = link.pairing else {
-            return link.nearby.isEmpty ? "Open Duet on your other Mac to pair it." : ""
+            return link.nearby.isEmpty ? "Open Ensemble on your other Mac to pair it." : ""
         }
         let name = pairing.peer.name
         guard session != nil, let peer else {
@@ -373,7 +388,7 @@ final class Duet {
                 })
             }
         }
-        center.nowPlayingInfo = [MPMediaItemPropertyTitle: "Sound of \(name)", MPMediaItemPropertyArtist: "Duet"]
+        center.nowPlayingInfo = [MPMediaItemPropertyTitle: "Sound of \(name)", MPMediaItemPropertyArtist: "Ensemble"]
         center.playbackState = peer?.playing == true ? .playing : .paused
     }
 

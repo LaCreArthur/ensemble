@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Network
+import dnssd
 import os
 
 /// The control link to the other Mac running Duet. It finds the other Mac on the local network
@@ -53,6 +54,8 @@ public final class Link {
     public private(set) var note: String?
     /// The paired Mac answered that it does not know this one: it needs a new pairing.
     public private(set) var refused = false
+    /// The user did not allow this app on the local network (Privacy & Security), so it finds no Mac.
+    public private(set) var denied = false
     /// Duets on the network to offer pairing with: all but the paired one, unless it refused.
     public var pairable: [Peer] {
         channels.contains { $0.exchange != nil } ? [] : nearby.filter { $0.id != pairing?.peer.id || refused }
@@ -137,6 +140,20 @@ public final class Link {
         let browser = NWBrowser(for: .bonjourWithTXTRecord(type: Self.type, domain: nil), using: Self.parameters(direct: direct))
         browser.browseResultsChangedHandler = { [weak self, weak browser] results, _ in
             MainActor.assumeIsolated { if let self, browser === self.browser { self.found(results) } }
+        }
+        browser.stateUpdateHandler = { [weak self, weak browser] state in
+            MainActor.assumeIsolated {
+                guard let self, browser === self.browser else { return }
+                let denied: Bool
+                switch state {
+                case .ready: denied = false
+                case .waiting(.dns(let code)), .failed(.dns(let code)): denied = code == kDNSServiceErr_PolicyDenied
+                default: return
+                }
+                guard denied != self.denied else { return }
+                self.denied = denied
+                self.onChange()
+            }
         }
         browser.start(queue: .main)
         self.browser = browser

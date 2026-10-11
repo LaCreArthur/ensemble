@@ -3,17 +3,17 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key><string>com.lacrearthur.duet</string>
-    <key>CFBundleName</key><string>Duet</string>
-    <key>CFBundleDisplayName</key><string>Duet</string>
-    <key>CFBundleExecutable</key><string>Duet</string>
+    <key>CFBundleName</key><string>Ensemble</string>
+    <key>CFBundleDisplayName</key><string>Ensemble</string>
+    <key>CFBundleExecutable</key><string>Ensemble</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>LSUIElement</key><true/>
-    <key>NSAudioCaptureUsageDescription</key><string>Duet plays the sound of your apps on your other speakers and on your other Mac.</string>
-    <key>NSMicrophoneUsageDescription</key><string>When you tune the sync, Duet listens for a few seconds to hear when each speaker plays.</string>
-    <key>NSLocalNetworkUsageDescription</key><string>Duet finds your other Mac running Duet, and exchanges the sound and the music controls with it.</string>
+    <key>NSAudioCaptureUsageDescription</key><string>Ensemble plays the sound of your apps on your other speakers and on your other Mac.</string>
+    <key>NSMicrophoneUsageDescription</key><string>When you tune the sync, Ensemble listens for a few seconds to hear when each speaker plays.</string>
+    <key>NSLocalNetworkUsageDescription</key><string>Ensemble finds your other Mac running Ensemble, and exchanges the sound and the music controls with it.</string>
     <key>NSBonjourServices</key><array><string>_duet._tcp</string><string>_duet._udp</string></array>
 </dict>
 </plist>
