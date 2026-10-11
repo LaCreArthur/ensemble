@@ -1,2 +1,0 @@
-import DuetCore
-print("Duet")

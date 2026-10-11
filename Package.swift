@@ -24,7 +24,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "DuetLab",
-            dependencies: ["DuetCore"],
+            dependencies: ["DuetCore", .product(name: "BigInt", package: "BigInt")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]
