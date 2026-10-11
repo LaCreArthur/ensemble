@@ -155,12 +155,8 @@ case "send":
     let (toReceiver, toSender) = labKeys(option("key")!)
     let sender = try StreamSender(engine: source, crypto: DatagramCrypto(send: toReceiver, receive: toSender))
     sender.start()
-    print("sending as \(sender.name); io frames", source.ioFrames, "latency", source.outputLatencyFrames)
-    let lead = LeadWatch(source)
-    for _ in 0..<Int(seconds) {
-        Thread.sleep(forTimeInterval: 1)
-        print(lead.take())
-    }
+    print("sending as \(sender.name)")
+    Thread.sleep(forTimeInterval: seconds)
     sender.stop(); source.stop(); silent.terminate()
 
 case "mic-check":
@@ -338,11 +334,8 @@ case "receive":
     let sink = Engine(input: .network(receiver), outputs: [device(named: "MacBook Pro Speakers")], delaySeconds: 0, sourceRate: 48_000)
     sink.outputs[0].gain.value = Float(option("gain") ?? "0")!
     try sink.start()
-    print("io frames", sink.ioFrames, "latency", sink.outputLatencyFrames)
-    let lead = LeadWatch(sink)
     for _ in 0..<Int(option("seconds") ?? "30")! {
         Thread.sleep(forTimeInterval: 1)
-        print(lead.take(), terminator: " | ")
         printStats(receiver.takeStats())
     }
     sink.stop(); receiver.stop()
@@ -381,7 +374,7 @@ case "hold":
     let names = (option("speakers") ?? "MacBook Pro Speakers,LG HDR 4K").split(separator: ",").map(String.init)
     let engine = Engine(input: .captureAllExcept([getpid()]), outputs: names.map(device(named:)), delaySeconds: Double(option("delay") ?? "0")!)
     try engine.start()
-    print("holding; io frames", engine.ioFrames, "latency", engine.outputLatencyFrames)
+    print("holding; latency", engine.outputLatencyFrames)
     Thread.sleep(forTimeInterval: Double(option("seconds") ?? "10")!)
     engine.stop()
 
@@ -434,30 +427,6 @@ func labKeys(_ hexKey: String) -> (SymmetricKey, SymmetricKey) {
         UInt8(hexKey[hexKey.index(hexKey.startIndex, offsetBy: $0)...].prefix(2), radix: 16)!
     })
     return (Seal.derive(key, salt: [], "to receiver"), Seal.derive(key, salt: [], "to sender"))
-}
-
-/// Watches an engine's IO cycles: the lead of each cycle's output time over the wall clock when the
-/// cycle ends (how far ahead the HAL asks for sound), min and max since the last read.
-final class LeadWatch: @unchecked Sendable {
-    private let lock = NSLock()
-    private var low = Double.infinity, high = -Double.infinity
-    init(_ engine: Engine) {
-        Thread { [self] in
-            var last = -1
-            while true {
-                if let a = engine.anchor.load(), a.frame != last {
-                    let lead = a.time - (Double(engine.outputLatencyFrames) + Double(engine.delayFrames)) / engine.sampleRate - HostClock.now
-                    last = a.frame
-                    lock.lock(); low = min(low, lead); high = max(high, lead); lock.unlock()
-                }
-                usleep(100)
-            }
-        }.start()
-    }
-    func take() -> String {
-        lock.lock(); defer { low = .infinity; high = -.infinity; lock.unlock() }
-        return String(format: "io lead %.1f..%.1f ms", low * 1000, high * 1000)
-    }
 }
 
 func printStats(_ s: StreamReceiver.Stats) {

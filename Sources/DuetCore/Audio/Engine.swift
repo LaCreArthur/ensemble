@@ -156,19 +156,6 @@ public final class Engine: @unchecked Sendable {
         }
     }
 
-    /// The aggregate's IO buffer size, output safety offset, and input latency (device + stream +
-    /// safety offset), in frames, for diagnosis.
-    public var ioFrames: (buffer: UInt32, safety: UInt32, inputLatency: UInt32) {
-        let input = kAudioObjectPropertyScopeInput
-        let streams = (try? CA.array(aggregateID, kAudioDevicePropertyStreams, input, as: AudioObjectID.self)) ?? []
-        let streamLatency = streams.first.flatMap { try? CA.scalar($0, kAudioStreamPropertyLatency, as: UInt32.self) } ?? 0
-        let inputLatency = ((try? CA.scalar(aggregateID, kAudioDevicePropertyLatency, input, as: UInt32.self)) ?? 0) + streamLatency
-            + ((try? CA.scalar(aggregateID, kAudioDevicePropertySafetyOffset, input, as: UInt32.self)) ?? 0)
-        return ((try? CA.scalar(aggregateID, kAudioDevicePropertyBufferFrameSize, as: UInt32.self)) ?? 0,
-                (try? CA.scalar(aggregateID, kAudioDevicePropertySafetyOffset, kAudioObjectPropertyScopeOutput, as: UInt32.self)) ?? 0,
-                inputLatency)
-    }
-
     /// Host time (seconds) at which stream frame `frame` is heard on the main output.
     public func heardTime(ofFrame frame: Int) -> Double? {
         anchor.load().map { $0.time + Double(frame - $0.frame) / sampleRate }
