@@ -5,7 +5,7 @@ Playbook: ~/workspace/harness/memory/duet/ (test rig, network findings, audio fi
 ## Now
 - Ensemble runs on both Macs (A shares on built-in + LG, Tribit Bluetooth speaker available; B receives); all 8 user stories verified; master pushed.
 - Bluetooth (ab8ee3a): every output but the main one plays on its own device, because the HAL aggregate hid a delay on the main output (95 ms with the Tribit). Verified by A's tune: B read 13.8 ms with the Tribit ticked (old LG offset, corrected), then -0.1 ms unticked. Trims now A 0, B 12.3 ms; Tribit lag 168 ms (takes 0.28 s); delay 0.28 s with it, 0.16 s without.
-- B still runs the 21:50 build (old engine). It interoperates (protocol unchanged) and plays on its built-in only, so nothing is wrong there; install ab8ee3a when Remote Login is on, after reading B's stored `lags` (their meaning changed: now "after the device's reported latency").
+- B runs ab8ee3a since 00:06 (no stored lags there). Receiving from A: 2 routes, 0 resent, error 0.00 ms, concealed only the 0.28 s at join (stayed 13312 frames over 90 s).
 - Tune across Macs works from both Macs (verified before the Bluetooth change; the last tune wins).
 - Arthur on the 0.15 s budget: "very good, i barely see the lag on a youtube video". No adaptive delay.
 - Not verified live: the first-use guide on an unpaired Mac (checked as off-screen renders), the Local Network denied state (PolicyDenied per Apple, never seen), Macs without Universal Control (AWDL may stall the router route), LG tune strength 8 to 9 (at the threshold), concealment right after a stream start.
