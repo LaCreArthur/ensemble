@@ -2,6 +2,7 @@ import CoreAudio
 import CryptoKit
 @testable import DuetCore
 import Foundation
+import Network
 
 // Development and measurement tool for Duet. Not shipped in the app.
 setvbuf(stdout, nil, _IOLBF, 0)
@@ -114,7 +115,7 @@ case "loop":
     let k1 = SymmetricKey(size: .bits256), k2 = SymmetricKey(size: .bits256)
     let sender = try StreamSender(engine: source, crypto: DatagramCrypto(send: k1, receive: k2))
     sender.start()
-    let receiver = try StreamReceiver(crypto: DatagramCrypto(send: k2, receive: k1), source: "127.0.0.1", port: sender.port)
+    let receiver = StreamReceiver(crypto: DatagramCrypto(send: k2, receive: k1), name: sender.name)
     receiver.start()
     let sink = Engine(input: .network(receiver), outputs: [speaker], delaySeconds: 0, sourceRate: source.sampleRate)
     try sink.start()
@@ -140,7 +141,7 @@ case "loop":
 
 case "send":
     // Cross-Mac network test, sending side: streams a silent child's capture (nothing is heard here)
-    // on UDP --port with the shared --key, for --seconds.
+    // with the shared --key, for --seconds; prints the stream's name for the receiving side.
     let seconds = Double(option("seconds") ?? "30")!
     let silent = Process()
     silent.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
@@ -152,15 +153,136 @@ case "send":
     source.outputs[0].gain.value = 0
     try source.start()
     let (toReceiver, toSender) = labKeys(option("key")!)
-    let sender = try StreamSender(engine: source, crypto: DatagramCrypto(send: toReceiver, receive: toSender), port: UInt16(option("port") ?? "47100")!)
+    let sender = try StreamSender(engine: source, crypto: DatagramCrypto(send: toReceiver, receive: toSender))
     sender.start()
-    print("sending on port \(sender.port); io frames", source.ioFrames, "latency", source.outputLatencyFrames)
+    print("sending as \(sender.name); io frames", source.ioFrames, "latency", source.outputLatencyFrames)
     let lead = LeadWatch(source)
     for _ in 0..<Int(seconds) {
         Thread.sleep(forTimeInterval: 1)
         print(lead.take())
     }
     sender.stop(); source.stop(); silent.terminate()
+
+case "mic-check":
+    // Records --seconds of the microphone and prints its level: all zeros means no permission.
+    let rec = try AcousticProbe().record(device: inputDevice(named: micName), duration: Double(option("seconds") ?? "1")!)
+    let rms = (rec.samples.reduce(0) { $0 + Double($1 * $1) } / Double(max(1, rec.samples.count))).squareRoot()
+    print("samples", rec.samples.count, String(format: "rms %.6f peak %.4f", rms, rec.samples.map(abs).max() ?? 0))
+
+case "p2p-serve":
+    // Stand-in for the sound stream over the system networking API (which may use the direct
+    // Mac-to-Mac Wi-Fi link): sends 1000 bytes every 5 ms, stamped with the send time, to each
+    // client that says hello, for --seconds.
+    let parameters = NWParameters.udp
+    parameters.includePeerToPeer = true
+    parameters.serviceClass = .interactiveVoice
+    let port = NWEndpoint.Port(rawValue: UInt16(option("port") ?? "47200")!)!
+    let listener = try NWListener(using: parameters, on: port)
+    listener.service = NWListener.Service(name: "duet-lab-\(port)", type: "_duetlab._udp")
+    let queue = DispatchQueue(label: "serve", qos: .userInteractive)
+    listener.newConnectionHandler = { connection in
+        print("client", connection.endpoint)
+        connection.start(queue: queue)
+        var seq: UInt64 = 0
+        let timer = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(5), leeway: .microseconds(200))
+        timer.setEventHandler {
+            var packet = [UInt8](repeating: 0, count: 1000)
+            withUnsafeBytes(of: seq) { packet.replaceSubrange(0..<8, with: $0) }
+            withUnsafeBytes(of: HostClock.now) { packet.replaceSubrange(8..<16, with: $0) }
+            connection.send(content: Data(packet), completion: .idempotent)
+            seq += 1
+        }
+        timer.resume()
+        connection.stateUpdateHandler = { if case .cancelled = $0 { timer.cancel() } }
+    }
+    listener.stateUpdateHandler = { print("listener", $0) }
+    listener.start(queue: queue)
+    Thread.sleep(forTimeInterval: Double(option("seconds") ?? "200")!)
+
+case "p2p-browse":
+    // Browses --type over every interface, including the direct Mac-to-Mac link, for --seconds,
+    // printing each result's interfaces.
+    let parameters = NWParameters()
+    parameters.includePeerToPeer = true
+    let browser = NWBrowser(for: .bonjour(type: option("type") ?? "_duet._tcp", domain: nil), using: parameters)
+    browser.browseResultsChangedHandler = { results, _ in
+        for r in results { print(r.endpoint, r.interfaces.map { "\($0.name) \($0.type)" }) }
+    }
+    browser.start(queue: DispatchQueue(label: "browse"))
+    Thread.sleep(forTimeInterval: Double(option("seconds") ?? "60")!)
+
+case "p2p-listen":
+    // Receives p2p-serve's packets from --host:--port and prints, every 10 s, their delay variation
+    // (arrival minus send time, minus the smallest seen, so the clock offset cancels).
+    let parameters = NWParameters.udp
+    parameters.includePeerToPeer = true
+    parameters.serviceClass = .interactiveVoice
+    (parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options)?.shouldCalculateReceiveTime = true
+    let queue = DispatchQueue(label: "listen", qos: .userInteractive)
+    var endpoint: NWEndpoint?
+    if let service = option("service") {
+        // Find the service over the direct link and require that link for the connection.
+        let browser = NWBrowser(for: .bonjour(type: "_duetlab._udp", domain: nil), using: parameters)
+        let found = DispatchSemaphore(value: 0)
+        browser.browseResultsChangedHandler = { results, _ in
+            for r in results where "\(r.endpoint)".contains(service) {
+                print("found", r.endpoint, r.interfaces.map(\.name))
+                if let direct = r.interfaces.first(where: { $0.name.hasPrefix("awdl") }), endpoint == nil {
+                    parameters.requiredInterface = direct
+                    endpoint = r.endpoint
+                    found.signal()
+                }
+            }
+        }
+        browser.start(queue: queue)
+        _ = found.wait(timeout: .now() + 10)
+    } else {
+        endpoint = .hostPort(host: NWEndpoint.Host(option("host")!), port: NWEndpoint.Port(rawValue: UInt16(option("port") ?? "47200")!)!)
+    }
+    guard let endpoint else { fatalError("not found over the direct link") }
+    let connection = NWConnection(to: endpoint, using: parameters)
+    let lock = NSLock()
+    var delays = [Double](), lastSeq: UInt64?, lost = 0, all = [Double]()
+    let dump = option("dump")   // file for every packet: sequence, arrival, send time
+    var dumped = [(UInt64, Double, Double)]()
+    func receive() {
+        connection.receiveMessage { data, context, _, error in
+            if let data, data.count >= 16 {
+                let seq = data.withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }
+                let sent = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 8, as: Double.self) }
+                let meta = context?.protocolMetadata(definition: NWProtocolIP.definition) as? NWProtocolIP.Metadata
+                let arrival = (meta?.receiveTime).map { Double($0) / 1e9 } ?? Double(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) / 1e9
+                lock.lock()
+                if let lastSeq, seq > lastSeq + 1 { lost += Int(seq - lastSeq - 1) }
+                lastSeq = max(lastSeq ?? 0, seq)
+                delays.append(arrival - sent)
+                if dump != nil { dumped.append((seq, arrival, sent)) }
+                lock.unlock()
+            }
+            if error == nil { receive() } else { print("receive error", error!) }
+        }
+    }
+    connection.stateUpdateHandler = { print("connection", $0, connection.currentPath?.localEndpoint.map { "\($0)" } ?? "") }
+    connection.start(queue: queue)
+    receive()
+    for second in 1...Int(option("seconds") ?? "180")! {
+        connection.send(content: Data("hello".utf8), completion: .idempotent)
+        Thread.sleep(forTimeInterval: 1)
+        guard second % 10 == 0 else { continue }
+        lock.lock(); all += delays; let window = delays; delays.removeAll(); let l = lost; lock.unlock()
+        guard let base = all.min(), !window.isEmpty else { print("no packets"); continue }
+        let v = window.map { ($0 - base) * 1000 }.sorted()
+        func q(_ p: Double) -> Double { v[min(v.count - 1, Int(p * Double(v.count)))] }
+        print(String(format: "%3ds packets %5d lost %3d | variation median %5.1f p99 %6.1f max %6.1f ms | >20 %3d >50 %3d >100 %3d",
+                     second, v.count, l, q(0.5), q(0.99), v.last!, v.filter { $0 > 20 }.count, v.filter { $0 > 50 }.count, v.filter { $0 > 100 }.count))
+    }
+
+    if let dump {
+        lock.lock()
+        try dumped.map { "\($0.0) \($0.1) \($0.2)" }.joined(separator: "\n").write(toFile: dump, atomically: true, encoding: .utf8)
+        lock.unlock()
+    }
 
 case "audio-processes":
     // Lists the processes that use audio now: pid, input/output running, bundle ID.
@@ -195,7 +317,7 @@ case "link":
         print("A sees B:", spin(10) { a.nearby.contains { $0.id == b.me.id } }, t())
         a.pair(with: a.nearby.first { $0.id == b.me.id }!)
         print("paired:", spin(10) { a.pairing != nil && b.pairing != nil }, codes, "same code:", Set(codes).count == 1, t())
-        print("sessions:", spin(10) { a.session != nil && b.session != nil }, t(), a.session?.address ?? "-", b.session?.address ?? "-")
+        print("sessions:", spin(10) { a.session != nil && b.session != nil }, t())
         a.send(["t": "hi", "from": "A"])
         b.send(["t": "hi", "from": "B"])
         _ = spin(1) { false }
@@ -208,10 +330,10 @@ case "link":
     }
 
 case "receive":
-    // Cross-Mac network test, receiving side: plays the stream from --host:--port at --gain (default 0,
+    // Cross-Mac network test, receiving side: plays the stream named --name at --gain (default 0,
     // silent) and prints the link statistics every second.
     let (toReceiver, toSender) = labKeys(option("key")!)
-    let receiver = try StreamReceiver(crypto: DatagramCrypto(send: toSender, receive: toReceiver), source: option("host")!, port: UInt16(option("port") ?? "47100")!)
+    let receiver = StreamReceiver(crypto: DatagramCrypto(send: toSender, receive: toReceiver), name: option("name")!)
     receiver.start()
     let sink = Engine(input: .network(receiver), outputs: [device(named: "MacBook Pro Speakers")], delaySeconds: 0, sourceRate: 48_000)
     sink.outputs[0].gain.value = Float(option("gain") ?? "0")!
@@ -339,6 +461,6 @@ final class LeadWatch: @unchecked Sendable {
 }
 
 func printStats(_ s: StreamReceiver.Stats) {
-    print(String(format: "packets %d resent %d concealed %d jumps %d | margin min %.1f ms | rtt %.2f ms offset %.3f ms drift %.1f ppm | error %.3f ms",
-                 s.packets, s.resent, s.concealed, s.jumps, s.minMargin * 1000, s.roundTrip * 1000, s.offset.truncatingRemainder(dividingBy: 1) * 1000, s.drift * 1e6, s.error * 1000))
+    print(String(format: "routes %d packets %d resent %d concealed %d jumps %d | margin min %.1f ms | rtt %.2f ms offset %.3f ms drift %.1f ppm | error %.3f ms",
+                 s.routes, s.packets, s.resent, s.concealed, s.jumps, s.minMargin * 1000, s.roundTrip * 1000, s.offset.truncatingRemainder(dividingBy: 1) * 1000, s.drift * 1e6, s.error * 1000))
 }

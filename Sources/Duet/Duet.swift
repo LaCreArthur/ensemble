@@ -5,6 +5,7 @@ import MediaPlayer
 import Observation
 import ServiceManagement
 import SystemConfiguration
+import os
 
 /// The app's state, and the rules that run the audio engine and the link to the other Mac.
 ///
@@ -61,11 +62,12 @@ final class Duet {
     var isReceiving: Bool { if case .stream = running?.input { true } else { false } }
 
     struct PeerState: Equatable {
-        var on: Bool, since: Double, port: Int, playing: Bool, volume: Double, canPlay: Bool, lead: Double
+        /// `stream`: the Bonjour name of its sound stream, empty while it sends none.
+        var on: Bool, since: Double, stream: String, playing: Bool, volume: Double, canPlay: Bool, lead: Double
         init(_ m: [String: Any]) {
             on = m["on"] as? Bool ?? false
             since = m["since"] as? Double ?? 0
-            port = m["port"] as? Int ?? 0
+            stream = m["stream"] as? String ?? ""
             playing = m["playing"] as? Bool ?? false
             volume = m["volume"] as? Double ?? 1
             canPlay = m["canPlay"] as? Bool ?? false
@@ -75,7 +77,7 @@ final class Duet {
 
     private enum Input: Equatable {
         case capture
-        case stream(address: String, port: UInt16, session: ObjectIdentifier)
+        case stream(name: String, session: ObjectIdentifier)
     }
 
     private struct Config: Equatable {
@@ -98,11 +100,15 @@ final class Duet {
     /// The last state sent to the other Mac, and in which session.
     private var sentState: (state: [String: AnyHashable], session: ObjectIdentifier)?
     private var remoteCommands: [(MPRemoteCommand, Any)] = []
+    private let log = Logger(subsystem: "com.lacrearthur.duet", category: "audio")
+    /// Logs the stream's health while this Mac plays the other Mac's sound.
+    private var healthTimer: Timer?
     /// Keeps App Nap away from the stream threads while sound plays.
     private var activity: NSObjectProtocol? { didSet { if let oldValue { ProcessInfo.processInfo.endActivity(oldValue) } } }
 
-    /// Lead time the other Mac gets: the sound is delayed this much here while it plays there.
-    static let networkDelay = 0.15
+    /// Lead time the other Mac gets: the sound is delayed this much here while it plays there. With the
+    /// first copy of both routes, 99.9% of packets come within 17 ms and the worst seen in 20 min was 90 ms.
+    static let networkDelay = 0.1
     static let holdTime: TimeInterval = 300
 
     init() {
@@ -186,8 +192,8 @@ final class Duet {
             if isOn, wanted {
                 let delay = peer?.canPlay == true ? max(localLead, Self.networkDelay + (peer?.lead ?? 0)) : localLead
                 desired = Config(outputs: devices.map(\.uid), delay: delay, input: .capture)
-            } else if !isOn, let peer, let session, peer.on, peer.port > 0, peer.port <= Int(UInt16.max) {
-                let input = Input.stream(address: session.address, port: UInt16(peer.port), session: ObjectIdentifier(session.crypto))
+            } else if !isOn, let peer, let session, peer.on, !peer.stream.isEmpty {
+                let input = Input.stream(name: peer.stream, session: ObjectIdentifier(session.crypto))
                 desired = Config(outputs: devices.map(\.uid), delay: localLead, input: input)
             }
         }
@@ -239,19 +245,22 @@ final class Duet {
         receiver = nil
         engine?.stop()
         engine = nil
+        healthTimer?.invalidate()
+        healthTimer = nil
         running = config
         activity = nil
-        guard let config else { return }
+        guard let config else { return log.notice("stopped") }
         let devices = config.outputs.compactMap { uid in outputs.first { $0.uid == uid } }
         let input: Engine.Input
         switch config.input {
         case .capture:
             input = .captureAllExcept([getpid()])
-        case .stream(let address, let port, _):
-            guard let session = link.session, let receiver = try? StreamReceiver(crypto: session.crypto, source: address, port: port) else {
+        case .stream(let name, _):
+            guard let session = link.session else {
                 running = nil
                 return
             }
+            let receiver = StreamReceiver(crypto: session.crypto, name: name)
             receiver.start()
             self.receiver = receiver
             input = .network(receiver)
@@ -261,12 +270,27 @@ final class Duet {
         do {
             try engine.start()
         } catch {
+            log.error("cannot start: \(String(describing: error), privacy: .public)")
             receiver?.stop()
             receiver = nil
             running = nil
             return
         }
         self.engine = engine
+        log.notice("playing \(self.receiver == nil ? "this Mac's sound" : "the other Mac's sound", privacy: .public) on \(devices.count) outputs, delay \(config.delay, format: .fixed(precision: 3)) s")
+        if let receiver {
+            healthTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self, weak receiver] _ in
+                guard let receiver else { return }
+                let s = receiver.takeStats()
+                MainActor.assumeIsolated {
+                    self?.log.notice("""
+                        stream: routes \(s.routes), packets \(s.packets) resent \(s.resent) concealed \(s.concealed) frames, jumps \(s.jumps), \
+                        least margin \(s.minMargin * 1000, format: .fixed(precision: 1)) ms, error \(s.error * 1000, format: .fixed(precision: 2)) ms, \
+                        round trip \(s.roundTrip * 1000, format: .fixed(precision: 1)) ms
+                        """)
+                }
+            }
+        }
         activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical], reason: "Playing sound")
         applyVolumes()
     }
@@ -300,7 +324,7 @@ final class Duet {
     private func sendState(canPlay: Bool, lead: Double) {
         guard let session = link.session else { return sentState = nil }
         let state: [String: AnyHashable] = [
-            "t": "state", "on": isOn, "since": since, "port": Int(sender?.port ?? 0), "playing": monitor.isPlaying,
+            "t": "state", "on": isOn, "since": since, "stream": sender?.name ?? "", "playing": monitor.isPlaying,
             "volume": mainVolume, "canPlay": canPlay, "lead": lead,
         ]
         let id = ObjectIdentifier(session.crypto)

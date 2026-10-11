@@ -34,8 +34,6 @@ public final class Link {
     /// The authenticated session with the paired Mac.
     public struct Session {
         public let peer: Peer
-        /// The other Mac's IPv4 address, for the sound stream.
-        public let address: String
         /// Keys for the sound stream of this session.
         public let crypto: DatagramCrypto
     }
@@ -104,8 +102,7 @@ public final class Link {
 
     // MARK: Network
 
-    /// TCP over IPv4 only, so the address the session reports also works for the UDP stream. Keepalive
-    /// notices a vanished Mac within about 5 s.
+    /// TCP; keepalive notices a vanished Mac within about 5 s.
     private static func parameters() -> NWParameters {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
@@ -113,9 +110,7 @@ public final class Link {
         tcp.keepaliveIdle = 2
         tcp.keepaliveInterval = 1
         tcp.keepaliveCount = 3
-        let parameters = NWParameters(tls: nil, tcp: tcp)
-        (parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options)?.version = .v4
-        return parameters
+        return NWParameters(tls: nil, tcp: tcp)
     }
 
     private func listen() {
@@ -198,11 +193,11 @@ public final class Link {
         case "hello": hello(channel, message)
         case "ready":
             // The first frame sealed with the session keys: the other Mac holds the pairing secret.
-            guard channel.isSealed, let peer = channel.peer, let address = channel.address, let crypto = channel.udp else { return channel.close() }
+            guard channel.isSealed, let peer = channel.peer, let crypto = channel.udp else { return channel.close() }
             channel.authenticated = true
             for other in channels where other !== channel && other.authenticated { other.close() }
             sessionChannel = channel
-            session = Session(peer: peer, address: address, crypto: crypto)
+            session = Session(peer: peer, crypto: crypto)
             refused = false
             if note != nil, channel.exchange == nil { note = nil }
             onChange()
@@ -366,11 +361,6 @@ private final class Channel {
     }
 
     var isSealed: Bool { keys != nil }
-
-    var address: String? {
-        guard case .hostPort(let host, _) = connection.currentPath?.remoteEndpoint, case .ipv4(let ip) = host else { return nil }
-        return ip.rawValue.map(String.init).joined(separator: ".")
-    }
 
     func start() {
         connection.stateUpdateHandler = { [weak self] state in

@@ -1,56 +1,97 @@
 import CryptoKit
 import Foundation
+import Network
 import Synchronization
 
 /// The sound stream between the two Macs, over UDP. The sending Mac (its apps' sound) sends 5 ms
 /// packets of 16-bit stereo, each saying which capture frame it starts with and when that frame is
 /// heard on the sending Mac. The receiving Mac plays every frame at that same moment: it asks the
 /// sender for its clock several times a second, and resends requests for lost packets.
+///
+/// Every packet goes over each route between the Macs at once, and the receiver keeps the first
+/// copy. Wi-Fi gives two routes: through the router, and the direct Mac-to-Mac link that AirDrop and
+/// Universal Control use. One radio serves them in turn, so one is nearly always open: the router
+/// route stalls about 90 ms twice a second while the radio visits the direct link's channel, and
+/// the direct link stalls for longer when nothing holds it in real-time mode.
 enum StreamPacket {
     static let audio: UInt8 = 1, resend: UInt8 = 2, clockRequest: UInt8 = 3, clockAnswer: UInt8 = 4
     static let frames = 240
     /// The sender halves the sound before the 16-bit conversion so peaks up to twice full scale
     /// (a float stream may exceed 1) survive; the receiver doubles it back.
     static let headroom: Float = 2
+    /// Bonjour type of the sender's stream; the receiver finds it on every route.
+    static let service = "_duet._udp"
+
+    /// UDP in the voice class (Wi-Fi's low-latency queue), direct Mac-to-Mac link allowed, kernel receive times.
+    static func parameters() -> NWParameters {
+        let parameters = NWParameters.udp
+        parameters.includePeerToPeer = true
+        parameters.serviceClass = .interactiveVoice
+        (parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options)?.shouldCalculateReceiveTime = true
+        return parameters
+    }
+
+    /// Host time (seconds) at which the kernel received a datagram, free of the queue's wake-up delay.
+    static func arrival(_ context: NWConnection.ContentContext?) -> Double {
+        let now = HostClock.now
+        guard let received = (context?.protocolMetadata(definition: NWProtocolIP.definition) as? NWProtocolIP.Metadata)?.receiveTime,
+              received > 0 else { return now }
+        // The kernel stamps on the clock that runs during sleep (nanoseconds): keep only the datagram's age.
+        return now - Double(Int64(bitPattern: clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) &- received)) / 1e9
+    }
 }
 
-/// Sends the captured sound of `engine` to the receiver. The receiver's address is the source of
-/// the latest authentic clock request, so nothing is sent before the receiver asks.
+/// Sends the captured sound of `engine` to the receiver, on each route the receiver reaches it by.
+/// A route carries sound once it brought an authentic clock request, and until none came for 1 s.
 public final class StreamSender: @unchecked Sendable {
     /// Gain the receiver applies (the main volume), linear.
     public let gain = AtomicFloat(1)
-    public var port: UInt16 { socket.port }
     public let streamID = UInt32.random(in: 1...UInt32.max)
+    /// The stream's Bonjour name, which the receiver looks for.
+    public var name: String { "duet-" + String(streamID, radix: 16) }
 
     /// The session keys it sends with.
     public let crypto: DatagramCrypto
     private let engine: Engine
-    private let socket: UDPSocket
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "duet.stream.sender", qos: .userInteractive)
     private let running = Atomic<Bool>(true)
     private let lock = NSLock()
-    private var destination: sockaddr_in?
+    /// Routes to the receiver, with the host time of their latest clock request.
+    private var destinations: [(flow: NWConnection, heard: Double)] = []
     /// Recent packets by packet index, for resending.
-    private var backlog = [Int: [UInt8]]()
+    private var backlog = [Int: Data]()
     private static let backlogPackets = 400   // 2 s
 
-    public init(engine: Engine, crypto: DatagramCrypto, port: UInt16 = 0) throws {
+    public init(engine: Engine, crypto: DatagramCrypto) throws {
         self.engine = engine
         self.crypto = crypto
-        socket = try UDPSocket(port: port)
+        listener = try NWListener(using: StreamPacket.parameters())
+        listener.service = NWListener.Service(name: name, type: StreamPacket.service)
     }
 
     public func start() {
+        listener.newConnectionHandler = { [weak self] flow in
+            guard let self else { return flow.cancel() }
+            flow.start(queue: queue)
+            receive(flow)
+        }
+        listener.start(queue: queue)
         let send = Thread { [self] in sendLoop() }
         send.qualityOfService = .userInteractive
         send.name = "duet.stream.send"
         send.start()
-        let receive = Thread { [self] in receiveLoop() }
-        receive.qualityOfService = .userInteractive
-        receive.name = "duet.stream.requests"
-        receive.start()
     }
 
-    public func stop() { running.store(false, ordering: .relaxed) }
+    public func stop() {
+        running.store(false, ordering: .relaxed)
+        listener.cancel()
+        lock.lock()
+        let flows = destinations.map(\.flow)
+        destinations = []
+        lock.unlock()
+        for flow in flows { flow.cancel() }
+    }
 
     private func sendLoop() {
         let ring = engine.ring
@@ -61,9 +102,12 @@ public final class StreamSender: @unchecked Sendable {
         while running.load(ordering: .relaxed) {
             Thread.sleep(forTimeInterval: 0.002)
             lock.lock()
-            let destination = self.destination
+            let now = HostClock.now
+            for gone in destinations where now - gone.heard > 1 { gone.flow.cancel() }
+            destinations.removeAll { now - $0.heard > 1 }
+            let flows = destinations.map(\.flow)
             lock.unlock()
-            guard let destination else { continue }
+            guard !flows.isEmpty else { continue }
             let written = ring.writeIndex
             if next == nil || written - next! > ring.capacity / 2 { next = written - written % count }
             while next! + count <= written {
@@ -85,8 +129,8 @@ public final class StreamSender: @unchecked Sendable {
                     let scaled = x / StreamPacket.headroom * 32767 + (a - b)
                     payload.put(Int16(max(-32768, min(32767, scaled.rounded()))))
                 }
-                let packet = crypto.seal(StreamPacket.audio, payload.bytes)
-                socket.send(packet, to: destination)
+                let packet = Data(crypto.seal(StreamPacket.audio, payload.bytes))
+                for flow in flows { flow.send(content: packet, completion: .idempotent) }
                 let index = frame / count
                 lock.lock()
                 backlog[index] = packet
@@ -96,32 +140,42 @@ public final class StreamSender: @unchecked Sendable {
         }
     }
 
-    private func receiveLoop() {
-        while running.load(ordering: .relaxed) {
-            guard let (bytes, from, arrival) = socket.receive(timeout: 0.25), let (type, payload) = crypto.open(bytes) else { continue }
-            var reader = ByteReader(payload)
-            switch type {
-            case StreamPacket.clockRequest:
-                guard let t1 = reader.double() else { continue }
-                lock.lock()
-                destination = from
-                lock.unlock()
-                var answer = ByteWriter()
-                answer.put(t1)
-                answer.put(arrival)
-                answer.put(HostClock.now)
-                socket.send(crypto.seal(StreamPacket.clockAnswer, answer.bytes), to: from)
-            case StreamPacket.resend:
-                guard reader.get(UInt32.self) == streamID, let n = reader.get(UInt16.self) else { continue }
-                for _ in 0..<n {
-                    guard let index = reader.get(Int64.self) else { break }
-                    lock.lock()
-                    let packet = backlog[Int(index)]
-                    lock.unlock()
-                    if let packet { socket.send(packet, to: from) }
-                }
-            default: break
+    private func receive(_ flow: NWConnection) {
+        flow.receiveMessage { [weak self, weak flow] content, context, _, error in
+            guard let self, let flow else { return }
+            if let content {
+                // Anything that is not from the receiver closes the flow.
+                guard let (type, payload) = crypto.open([UInt8](content)) else { return flow.cancel() }
+                handle(type, payload, from: flow, arrival: StreamPacket.arrival(context))
             }
+            if error == nil { receive(flow) } else { flow.cancel() }
+        }
+    }
+
+    private func handle(_ type: UInt8, _ payload: [UInt8], from flow: NWConnection, arrival: Double) {
+        var reader = ByteReader(payload)
+        switch type {
+        case StreamPacket.clockRequest:
+            guard let t1 = reader.double() else { return }
+            lock.lock()
+            destinations.removeAll { $0.flow === flow }
+            destinations.append((flow, arrival))
+            lock.unlock()
+            var answer = ByteWriter()
+            answer.put(t1)
+            answer.put(arrival)
+            answer.put(HostClock.now)
+            flow.send(content: Data(crypto.seal(StreamPacket.clockAnswer, answer.bytes)), completion: .idempotent)
+        case StreamPacket.resend:
+            guard reader.get(UInt32.self) == streamID, let n = reader.get(UInt16.self) else { return }
+            for _ in 0..<n {
+                guard let index = reader.get(Int64.self) else { break }
+                lock.lock()
+                let packet = backlog[Int(index)]
+                lock.unlock()
+                if let packet { flow.send(content: packet, completion: .idempotent) }
+            }
+        default: break
         }
     }
 }
@@ -132,6 +186,8 @@ public final class StreamSender: @unchecked Sendable {
 public final class StreamReceiver: @unchecked Sendable {
     public struct Stats: Sendable {
         public var packets = 0
+        /// Network routes the stream comes by (router, direct Mac-to-Mac link).
+        public var routes = 0
         public var resent = 0
         /// Output frames played as silence because their packet was missing.
         public var concealed = 0
@@ -156,9 +212,8 @@ public final class StreamReceiver: @unchecked Sendable {
     }
 
     private let crypto: DatagramCrypto
-    private let socket: UDPSocket
-    private let source: sockaddr_in
-    private let running = Atomic<Bool>(true)
+    /// The sender's Bonjour name.
+    private let name: String
 
     // Packet store: slot = packet index modulo `slots`; a slot's tag is the packet index it holds
     // (-1 while being written), checked before and after a read.
@@ -167,13 +222,19 @@ public final class StreamReceiver: @unchecked Sendable {
     private let tags: UnsafeMutablePointer<Atomic<Int64>>
     private let mapping = SeqLock<Mapping?>(nil)
 
-    // Network thread only.
+    // Network queue only.
+    private let queue = DispatchQueue(label: "duet.stream.receiver", qos: .userInteractive)
+    private var browser: NWBrowser?
+    private var timer: DispatchSourceTimer?
+    /// The sender as Bonjour found it, and one flow to it per network interface it was found on.
+    private var sender: NWBrowser.Result?
+    private var flows = [String: NWConnection]()
+    private var started = 0.0, nextRequest = 0.0, nextConnect = 0.0
     private var clock = ClockSync()
     private var stream: UInt32 = 0
     private var newest: Mapping?
     private var highest = -1
     private var missing = [Int: (first: Double, asked: Double)]()
-    private var arrivals = [Int: Double]()   // packet index -> arrival, for the margin
 
     // IO thread only.
     private var outputRate = 48_000.0
@@ -189,10 +250,9 @@ public final class StreamReceiver: @unchecked Sendable {
     private let statsLock = NSLock()
     private var stats = Stats()
 
-    public init(crypto: DatagramCrypto, source ip: String, port: UInt16) throws {
+    public init(crypto: DatagramCrypto, name: String) {
         self.crypto = crypto
-        socket = try UDPSocket()
-        self.source = UDPSocket.address(ip, port)
+        self.name = name
         store = .allocate(capacity: Self.slots * StreamPacket.frames * 2)
         store.initialize(repeating: 0, count: Self.slots * StreamPacket.frames * 2)
         tags = .allocate(capacity: Self.slots)
@@ -213,13 +273,32 @@ public final class StreamReceiver: @unchecked Sendable {
     }
 
     public func start() {
-        let thread = Thread { [self] in networkLoop() }
-        thread.qualityOfService = .userInteractive
-        thread.name = "duet.stream.receive"
-        thread.start()
+        queue.async { [self] in
+            started = HostClock.now
+            let browser = NWBrowser(for: .bonjour(type: StreamPacket.service, domain: nil), using: StreamPacket.parameters())
+            browser.browseResultsChangedHandler = { [weak self] results, _ in
+                guard let self else { return }
+                sender = results.first { if case .service(self.name, _, _, _) = $0.endpoint { true } else { false } }
+                connect()
+            }
+            browser.start(queue: queue)
+            self.browser = browser
+            let timer = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
+            timer.setEventHandler { [weak self] in self?.tick() }
+            timer.schedule(deadline: .now(), repeating: .milliseconds(10), leeway: .milliseconds(1))
+            timer.resume()
+            self.timer = timer
+        }
     }
 
-    public func stop() { running.store(false, ordering: .relaxed) }
+    public func stop() {
+        queue.async { [self] in
+            browser?.cancel()
+            timer?.cancel()
+            for flow in flows.values { flow.cancel() }
+            flows = [:]
+        }
+    }
 
     /// Seconds since the last audio packet arrived (infinity before the first).
     public var silence: Double {
@@ -236,36 +315,74 @@ public final class StreamReceiver: @unchecked Sendable {
         return s
     }
 
-    // MARK: Network thread
+    // MARK: Network queue
 
-    private func networkLoop() {
-        var nextRequest = 0.0
-        let started = HostClock.now
-        while running.load(ordering: .relaxed) {
-            let now = HostClock.now
-            if now >= nextRequest {
+    /// Opens a flow to the sender on each interface Bonjour found it on that has none.
+    private func connect() {
+        guard let sender else { return }
+        for interface in sender.interfaces where flows[interface.name] == nil {
+            let parameters = StreamPacket.parameters()
+            parameters.requiredInterface = interface
+            let flow = NWConnection(to: sender.endpoint, using: parameters)
+            flows[interface.name] = flow
+            flow.stateUpdateHandler = { [weak self, weak flow] state in
+                guard let self, let flow else { return }
+                switch state {
+                case .failed: flow.cancel()
+                case .cancelled: if flows[interface.name] === flow { flows[interface.name] = nil }
+                default: break
+                }
+                let routes = flows.values.filter { $0.state == .ready }.count
+                statsLock.lock()
+                stats.routes = routes
+                statsLock.unlock()
+            }
+            flow.start(queue: queue)
+            receive(flow)
+        }
+    }
+
+    private func tick() {
+        let now = HostClock.now
+        if now >= nextRequest {
+            for flow in flows.values where flow.state == .ready {
                 var request = ByteWriter()
                 request.put(HostClock.now)
-                socket.send(crypto.seal(StreamPacket.clockRequest, request.bytes), to: source)
-                // A fast burst at first, then a steady 50 per second that also keeps both radios awake.
-                nextRequest = now + (now - started < 3 ? 0.01 : 0.02)
+                flow.send(content: Data(crypto.seal(StreamPacket.clockRequest, request.bytes)), completion: .idempotent)
             }
-            askForMissing(now: now)
-            guard let (bytes, _, arrival) = socket.receive(timeout: max(0.001, nextRequest - HostClock.now)),
-                  let (type, payload) = crypto.open(bytes) else { continue }
-            var reader = ByteReader(payload)
-            switch type {
-            case StreamPacket.audio: receiveAudio(&reader, arrival: arrival)
-            case StreamPacket.clockAnswer:
-                guard let t1 = reader.double(), let t2 = reader.double(), let t3 = reader.double() else { continue }
-                clock.add(t1: t1, t2: t2, t3: t3, t4: arrival)
-                publish()
-                statsLock.lock()
-                stats.roundTrip = clock.minRoundTrip
-                if let model = clock.model { stats.offset = model.offset(at: arrival); stats.drift = model.drift }
-                statsLock.unlock()
-            default: break
+            // A fast burst at first, then a steady 50 per second that also keeps the routes awake.
+            nextRequest = now + (now - started < 3 ? 0.01 : 0.02)
+        }
+        if now >= nextConnect {
+            connect()   // a route that failed comes back
+            nextConnect = now + 1
+        }
+        askForMissing(now: now)
+    }
+
+    private func receive(_ flow: NWConnection) {
+        flow.receiveMessage { [weak self, weak flow] content, context, _, error in
+            guard let self, let flow else { return }
+            if let content, let (type, payload) = crypto.open([UInt8](content)) {
+                handle(type, payload, arrival: StreamPacket.arrival(context))
             }
+            if error == nil { receive(flow) } else { flow.cancel() }
+        }
+    }
+
+    private func handle(_ type: UInt8, _ payload: [UInt8], arrival: Double) {
+        var reader = ByteReader(payload)
+        switch type {
+        case StreamPacket.audio: receiveAudio(&reader, arrival: arrival)
+        case StreamPacket.clockAnswer:
+            guard let t1 = reader.double(), let t2 = reader.double(), let t3 = reader.double() else { return }
+            clock.add(t1: t1, t2: t2, t3: t3, t4: arrival)
+            publish()
+            statsLock.lock()
+            stats.roundTrip = clock.minRoundTrip
+            if let model = clock.model { stats.offset = model.offset(at: arrival); stats.drift = model.drift }
+            statsLock.unlock()
+        default: break
         }
     }
 
@@ -280,13 +397,12 @@ public final class StreamReceiver: @unchecked Sendable {
             stream = id
             highest = -1
             missing.removeAll()
-            arrivals.removeAll()
             for i in 0..<Self.slots { tags[i].store(-1, ordering: .relaxed) }
         }
         let index = frame / count
         if highest >= 0, index <= highest - Self.slots / 2 { return }   // far too old
         let slot = index % Self.slots
-        guard tags[slot].load(ordering: .relaxed) != Int64(index) else { return }   // duplicate
+        guard tags[slot].load(ordering: .relaxed) != Int64(index) else { return }   // a copy from a slower route
         tags[slot].store(-1, ordering: .relaxed)
         atomicMemoryFence(ordering: .releasing)
         let samples = store + slot * count * 2
@@ -305,8 +421,6 @@ public final class StreamReceiver: @unchecked Sendable {
                              clock: clock.model ?? ClockSync.Model(time: 0, offset: 0, drift: 0))
             publish()
         }
-        arrivals[index] = arrival
-        arrivals[index - Self.slots] = nil
         statsLock.lock()
         stats.packets += 1
         if recovered { stats.resent += 1 }
@@ -336,7 +450,8 @@ public final class StreamReceiver: @unchecked Sendable {
             request.put(Int64(index))
             missing[index]?.asked = now
         }
-        socket.send(crypto.seal(StreamPacket.resend, request.bytes), to: source)
+        let packet = Data(crypto.seal(StreamPacket.resend, request.bytes))
+        for flow in flows.values where flow.state == .ready { flow.send(content: packet, completion: .idempotent) }
     }
 
     // MARK: IO thread
