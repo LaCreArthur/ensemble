@@ -118,7 +118,7 @@ public final class Engine: @unchecked Sendable {
         }
         do {
             try check(AudioHardwareCreateAggregateDevice(description as CFDictionary, &aggregateID), "create aggregate device")
-            outputLatencyFrames = Self.outputLatency(of: aggregateID)
+            outputLatencyFrames = CA.outputLatencyFrames(aggregateID)
             try check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, nil) { [unowned self] _, input, _, output, outputTime in
                 self.render(input: input, output: output, outputTime: outputTime)
             }, "create IO proc")
@@ -194,13 +194,6 @@ public final class Engine: @unchecked Sendable {
         description.isPrivate = true
         description.muteBehavior = .mutedWhenTapped
         return description
-    }
-
-    private static func outputLatency(of device: AudioObjectID) -> UInt32 {
-        let deviceLatency = (try? CA.scalar(device, kAudioDevicePropertyLatency, kAudioObjectPropertyScopeOutput, as: UInt32.self)) ?? 0
-        let streams = (try? CA.array(device, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput, as: AudioObjectID.self)) ?? []
-        let streamLatency = streams.first.flatMap { try? CA.scalar($0, kAudioStreamPropertyLatency, as: UInt32.self) } ?? 0
-        return deviceLatency + streamLatency
     }
 
     // MARK: IO thread
