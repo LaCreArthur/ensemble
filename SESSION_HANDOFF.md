@@ -3,24 +3,25 @@
 Playbook: ~/workspace/harness/memory/duet/ (test rig, network findings, audio findings, decisions, test safety).
 
 ## Now
-- Ensemble runs on both Macs (A shares on built-in + LG, Tribit Bluetooth speaker available; B receives); all 8 user stories verified; master pushed.
-- Bluetooth (ab8ee3a): every output but the main one plays on its own device, because the HAL aggregate hid a delay on the main output (95 ms with the Tribit). Verified by A's tune: B read 13.8 ms with the Tribit ticked (old LG offset, corrected), then -0.1 ms unticked. Trims now A 0, B 12.3 ms; Tribit lag 168 ms (takes 0.28 s); delay 0.28 s with it, 0.16 s without.
-- B runs ab8ee3a since 00:06 (no stored lags there). Receiving from A: 2 routes, 0 resent, error 0.00 ms, concealed only the 0.28 s at join (stayed 13312 frames over 90 s).
-- Tune across Macs works from both Macs (verified before the Bluetooth change; the last tune wins).
-- Arthur on the 0.15 s budget: "very good, i barely see the lag on a youtube video". No adaptive delay.
-- Not verified live: the first-use guide on an unpaired Mac (checked as off-screen renders), the Local Network denied state (PolicyDenied per Apple, never seen), Macs without Universal Control (AWDL may stall the router route), LG tune strength 8 to 9 (at the threshold), concealment right after a stream start.
+- Video sync is live on A (872110f): while A shares, the system output is Ensemble's own sound device (driver in Driver/, installed on A only), which reports capture 0.086 s + delay + speaker latency, so video waits. Arthur: lips "In sync" with the Tribit ticked (0.38 s), volume keys move every speaker.
+- Steady delay while paired (a85224c): room for the other Mac stays in the delay (its last lead stored), so the latency does not jump when B sleeps or wakes. A reports 0.25 s without the Tribit.
+- Always-running capture (dff6275): while sharing, the tap and the main output run all day with sleeping allowed (no coreaudiod sleep block, 0.3% CPU); other outputs and the stream start within about 15 ms of a sound and stop 5 min after. The engine restarts after a wake or a Core Audio restart.
+- B runs ab8ee3a (no driver, no steady delay, old on-demand capture). B was asleep at 09:20 (ssh timed out).
+- Not verified live: IO after sleep (restart on wake covers it), the Core Audio restart handler, browsers following a latency change mid-play, the first-use guide on an unpaired Mac, the Local Network denied state, Macs without Universal Control.
 
 ## Next
-1. When Arthur has the paid Apple developer account: Developer ID signing, hardened runtime, notarize and staple, a DMG or zip, a download page, an update path.
-2. Release test on another pair of Macs: fresh unpaired install (guide live), deny Local Network once, stream health without Universal Control.
-3. If cut-outs show there: compare router-only with both routes before touching the 0.15 s budget.
+1. B: install the new app and the driver (Arthur types the sudo install on B), then check B shares with video sync and A receives in sync.
+2. Arthur runs `sudo killall coreaudiod` once on A while a sound plays: the sound must come back by itself (Core Audio restart handler).
+3. When Arthur has the paid Apple developer account: Developer ID signing, hardened runtime, notarize and staple, an in-app driver installer with an admin prompt, a DMG or zip, a download page, an update path.
+4. Release test on another pair of Macs: fresh unpaired install, deny Local Network once, stream health without Universal Control, re-measure the capture path (`duet-lab device-path --device Ensemble`).
 
 ## Do not redo
 - One aggregate for several outputs: it delays the main output by an amount no property shows.
 - Ids stay "duet" (bundle id, Bonjour types, Keychain service, repo). Router channel fix: the Livebox is not ours.
 - Two-route send, one-microphone tune, one Volume slider; the AirPlay link and web remote are deleted.
+- On-demand capture with the device as system output: it loses the start of every sound after a quiet spell.
 
-Default effort for the next task: medium (high if cut-outs show on the second pair).
+Default effort for the next task: medium.
 
 ## Open questions
 - Which second pair of Macs (ideally without Universal Control) can host the release test?
