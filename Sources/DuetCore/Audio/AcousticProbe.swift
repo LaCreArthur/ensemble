@@ -84,7 +84,7 @@ public final class AcousticProbe: @unchecked Sendable {
     /// Returns the host times at which each click actually left the speaker (latency-corrected).
     public func playClicks(device: AudioObjectID, at times: [Double], amplitude: Float = 0.3) throws -> [Double] {
         let rate = (try? CA.scalar(device, kAudioDevicePropertyNominalSampleRate, as: Float64.self)) ?? 48_000
-        let latency = Double(OutputDevice(id: device)?.outputLatencyFrames ?? 0) / rate
+        let latency = Double(CA.outputLatencyFrames(device)) / rate
         let click = Self.clickWaveform(sampleRate: rate).map { $0 * amplitude }
         var emitted = [Double](repeating: 0, count: times.count)
         let lock = NSLock()

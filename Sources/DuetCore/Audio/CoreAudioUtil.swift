@@ -86,6 +86,13 @@ enum CA {
     }
 
     /// Number of buffers (streams) a device uses in the given scope.
+    /// Frames between handing a frame to an output device and hearing it, as the device reports.
+    static func outputLatencyFrames(_ id: AudioObjectID) -> UInt32 {
+        let device = (try? scalar(id, kAudioDevicePropertyLatency, kAudioObjectPropertyScopeOutput, as: UInt32.self)) ?? 0
+        let streams = (try? array(id, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput, as: AudioObjectID.self)) ?? []
+        return device + (streams.first.flatMap { try? scalar($0, kAudioStreamPropertyLatency, as: UInt32.self) } ?? 0)
+    }
+
     static func bufferCount(_ id: AudioObjectID, _ scope: AudioObjectPropertyScope) -> Int {
         var addr = address(kAudioDevicePropertyStreamConfiguration, scope)
         var size: UInt32 = 0
@@ -176,12 +183,7 @@ public struct OutputDevice: Hashable, Identifiable, Sendable {
     }
 
     /// Frames between the moment a frame is handed to the device and the moment it is heard.
-    public var outputLatencyFrames: UInt32 {
-        let device = (try? CA.scalar(id, kAudioDevicePropertyLatency, kAudioObjectPropertyScopeOutput, as: UInt32.self)) ?? 0
-        let streams = (try? CA.array(id, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput, as: AudioObjectID.self)) ?? []
-        let stream = streams.first.flatMap { try? CA.scalar($0, kAudioStreamPropertyLatency, as: UInt32.self) } ?? 0
-        return device + stream
-    }
+    public var outputLatencyFrames: UInt32 { CA.outputLatencyFrames(id) }
 
     /// Seconds between handing a frame to the device and hearing it, as the device reports.
     public var outputLatency: Double { Double(outputLatencyFrames) / nominalSampleRate }

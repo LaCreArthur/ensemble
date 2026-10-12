@@ -50,10 +50,11 @@ case "probe":
     }
 
 case "clicks":
-    // Child process for capture tests: plays clicks at the given host times (seconds) on a speaker.
-    let speaker = device(named: option("speaker") ?? "MacBook Pro Speakers")
+    // Child process for capture tests: plays clicks at the given host times (seconds) on any output
+    // device, virtual ones included, as the device's reported latency places them.
+    let speaker = inputDevice(named: option("speaker") ?? "MacBook Pro Speakers")
     let times = option("at")!.split(separator: ",").map { Double($0)! }
-    _ = try AcousticProbe().playClicks(device: speaker.id, at: times, amplitude: Float(option("amp") ?? "0.1")!)
+    _ = try AcousticProbe().playClicks(device: speaker, at: times, amplitude: Float(option("amp") ?? "0.1")!)
 
 case "capture-test":
     // A child plays clicks on the speaker. Duet taps only that child (muting it), delays the sound by
@@ -397,6 +398,42 @@ case "follow":
     print(String(format: "delay %.1f ms (lead %.1f ms)", Double(engine.delayFrames) / engine.sampleRate * 1000, lead * 1000))
     for output in engine.outputs {
         print("\(output.device.name): rate \(output.device.nominalSampleRate), buffer \(output.device.bufferFrames), latency \(String(format: "%.1f", output.device.outputLatency * 1000)) ms, silent frames \(output.missed.load(ordering: .relaxed))")
+    }
+
+case "device-path":
+    // Silent: a child plays clicks on an output (--device) as an app would, the engine captures them (every
+    // output at gain 0), and the engine's timeline says when each would be heard. Prints the latency
+    // Ensemble's sound device must report for that, and its capture part (Duet.capturePath): the rest is
+    // the delay and the main output's latency. The capture part does not depend on the device clicked on
+    // (85.1 ms on the speakers, 86.1 ms on a virtual device, 2026-10-12).
+    let name = option("device") ?? "MacBook Pro Speakers"
+    let target = inputDevice(named: name)
+    let rate = (try? CA.scalar(target, kAudioDevicePropertyNominalSampleRate, as: Float64.self)) ?? 48_000
+    let reported = Double(CA.outputLatencyFrames(target)) / rate
+    let delay = Double(option("delay") ?? "0.15")!
+    let t0 = AcousticProbe().now() + 2.0
+    let refs = (0..<6).map { t0 + reported + Double($0) * 0.4 }
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    child.arguments = ["clicks", "--speaker", name, "--amp", "0.1", "--at", refs.map { String($0) }.joined(separator: ",")]
+    try child.run()
+    Thread.sleep(forTimeInterval: 0.6)
+    let engine = Engine(input: .captureOnly([child.processIdentifier]), outputs: [device(named: "MacBook Pro Speakers")], delaySeconds: delay)
+    engine.outputs[0].gain.value = 0
+    try engine.start()
+    child.waitUntilExit()
+    Thread.sleep(forTimeInterval: delay + 0.2)
+    let total = engine.ring.writeIndex
+    var captured = [Float](repeating: 0, count: total * 2)
+    _ = captured.withUnsafeMutableBufferPointer { engine.ring.read(at: 0, frames: total, into: $0.baseAddress!) }
+    let positions = findClicks(in: stride(from: 0, to: captured.count, by: 2).map { captured[$0] }, sampleRate: engine.sampleRate)
+    let heard = positions.compactMap { engine.heardTime(ofFrame: $0) }
+    let main = Double(engine.outputLatencyFrames) / engine.sampleRate
+    engine.stop()
+    print(String(format: "device reports %.1f ms; delay %.1f ms; main output %.1f ms; clicks %d", reported * 1000, delay * 1000, main * 1000, heard.count))
+    for (h, r) in zip(heard, refs) {
+        let needed = h - (r - reported)
+        print(String(format: "needed latency %.2f ms, capture path %.2f ms", needed * 1000, (needed - delay - main) * 1000))
     }
 
 case "hold":

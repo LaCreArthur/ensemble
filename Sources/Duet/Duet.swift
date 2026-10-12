@@ -15,7 +15,8 @@ import os
 /// wins). While one Mac plays the other's sound, both Macs have one volume: the volume keys, Control
 /// Center or the menu on either Mac set it, mute included; each output also has its own share of it,
 /// set on its Mac. The other Mac's menu and media keys control the music: play/pause, tracks. A Bluetooth output puts a Mac on standby (headphones: private
-/// listening) unless it is ticked as a speaker; the slowest ticked output sets the delay. The microphone tune on either Mac aligns its outputs, then the other Mac, as heard there. The capture runs only while some app plays sound, and for a while after, because
+/// listening) unless it is ticked as a speaker; the slowest ticked output sets the delay. While a Mac shares, apps play to
+/// Ensemble's sound device when it is installed: it reports the delay as its latency, so video waits for the sound. The microphone tune on either Mac aligns its outputs, then the other Mac, as heard there. The capture runs only while some app plays sound, and for a while after, because
 /// running audio keeps the Mac from sleeping.
 @MainActor @Observable
 final class Duet {
@@ -60,7 +61,7 @@ final class Duet {
     /// Where the first use stands, for the guide.
     private(set) var guide = Guide()
     /// This Mac's own volume (0...1), the volume of both Macs while one plays the other's sound; setting it sets the Mac's volume.
-    var mainVolume: Double = 1 { didSet { if abs(Double(mainVolumeControl?.position ?? 1) - mainVolume) > 0.001 { mainVolumeControl?.position = Float(mainVolume) } } }
+    var mainVolume: Double = 1 { didSet { if abs(Double(volumeControl?.position ?? 1) - mainVolume) > 0.001 { volumeControl?.position = Float(mainVolume) } } }
     /// What the other Mac last said about itself; nil without a session.
     private(set) var peer: PeerState?
     /// True while this Mac plays the other Mac's sound.
@@ -106,9 +107,15 @@ final class Duet {
     private var sender: StreamSender?
     private var receiver: StreamReceiver?
     private var running: Config?
+    /// The speakers' volume: they apply it themselves, and the other outputs get it as gain.
     private var mainVolumeControl: SystemVolume?
+    /// Ensemble's sound device's volume while it exists: the volume keys set it, the speakers follow it.
+    private var deviceVolume: SystemVolume?
+    /// The volume the user sets.
+    private var volumeControl: SystemVolume? { deviceVolume ?? mainVolumeControl }
     private var observers: [AnyObject] = []
     private var volumeObservers: [AnyObject] = []
+    private var deviceVolumeObservers: [AnyObject] = []
     /// The last state sent to the other Mac, and in which session.
     private var sentState: (state: [String: AnyHashable], session: ObjectIdentifier)?
     private var remoteCommands: [(MPRemoteCommand, Any)] = []
@@ -126,6 +133,10 @@ final class Duet {
     /// first copy of both routes, 99.9% of packets come within 17 ms, but while Universal Control rebuilds
     /// its direct link (every few minutes when idle) both routes stall up to about 150 ms.
     static let networkDelay = 0.15
+    /// Seconds from an app handing its sound to its output to that sound entering Ensemble's timeline:
+    /// macOS's capture (about 23 ms) and the engine's cycle (about 62 ms with 512-frame buffers), as
+    /// `duet-lab device-path` measures them. Part of the latency Ensemble's sound device reports.
+    static let capturePath = 0.086
     static let holdTime: TimeInterval = 300
 
     init() {
@@ -190,10 +201,6 @@ final class Duet {
     /// Brings the engine and the link in line with the settings, the devices and the other Mac.
     func update() {
         outputs = OutputDevice.all()
-        watchMainVolume()
-        mainVolume = Double(mainVolumeControl?.position ?? 1)
-        let system = OutputDevice.defaultOutput()
-        let headphones = system.flatMap { $0.isBluetooth && !chosenOutputs.contains($0.uid) ? $0 : nil }
         let session = link.session
         let peer = session == nil ? nil : self.peer
         if isOn, let peer, let session, peer.on, (peer.since, session.peer.id) > (since, link.me.id) {
@@ -201,18 +208,30 @@ final class Duet {
             return
         }
         let main = outputs.first(where: \.isBuiltIn) ?? outputs.first
-        if let system, let main, system.isBluetooth, headphones == nil, system != main, isOn || peer?.on == true {
-            // A ticked Bluetooth speaker plays through Ensemble; the Mac's own output and volume stay on its speakers.
-            try? OutputDevice.setDefaultOutput(main)
-        }
         // The built-in speakers always drive the timing, silent if not ticked.
         let devices = [main].compactMap { $0 } + outputs.filter { $0.uid != main?.uid && chosenOutputs.contains($0.uid) }
         let localLead = main.flatMap { main in devices.map { Engine.lead(of: $0, lag: lag($0), main: main) }.max() } ?? 0
+        let delay = peer?.canPlay == true ? max(localLead, Self.networkDelay + (peer?.lead ?? 0)) : localLead
+        let system = OutputDevice.defaultOutput()
+        let headphones = system.flatMap { $0.isBluetooth && !chosenOutputs.contains($0.uid) ? $0 : nil }
+        let sharing = isOn && !devices.isEmpty
+        if !sharing, EnsembleDevice.isSystemOutput, let main { try? OutputDevice.setDefaultOutput(main) }   // before the device goes
+        EnsembleDevice.setLatency(sharing ? Self.capturePath + delay + (main?.outputLatency ?? 0) + trim : nil)
+        let device = EnsembleDevice.id
+        if headphones == nil, isOn || peer?.on == true {
+            if sharing, device != nil {
+                if !EnsembleDevice.isSystemOutput { EnsembleDevice.makeSystemOutput() }
+            } else if let system, let main, system.isBluetooth, system != main {
+                // A ticked Bluetooth speaker plays through Ensemble; the Mac's own output and volume stay on its speakers.
+                try? OutputDevice.setDefaultOutput(main)
+            }
+        }
+        watchVolumes(device: device)
+        mainVolume = Double(volumeControl?.position ?? 1)
         let wanted = monitor.isPlaying || hold != nil || isTuning
         var desired: Config?
         if !devices.isEmpty, headphones == nil {
             if isOn, wanted {
-                let delay = peer?.canPlay == true ? max(localLead, Self.networkDelay + (peer?.lead ?? 0)) : localLead
                 desired = Config(outputs: devices.map(\.uid), delay: delay, input: .capture)
             } else if !isOn, let peer, let session, peer.on, !peer.stream.isEmpty {
                 let input = Input.stream(name: peer.stream, session: ObjectIdentifier(session.crypto))
@@ -359,7 +378,7 @@ final class Duet {
         guard let session = link.session else { return sentState = nil }
         let state: [String: AnyHashable] = [
             "t": "state", "on": isOn, "since": since, "stream": sender?.name ?? "", "playing": monitor.isPlaying,
-            "volume": mainVolume, "muted": mainVolumeControl?.isMuted ?? false, "canPlay": canPlay, "lead": lead, "trim": trim,
+            "volume": mainVolume, "muted": volumeControl?.isMuted ?? false, "canPlay": canPlay, "lead": lead, "trim": trim,
         ]
         let id = ObjectIdentifier(session.crypto)
         guard sentState?.state != state || sentState?.session != id else { return }
@@ -377,7 +396,7 @@ final class Duet {
         case "volume":
             guard isOn, let value = message["value"] as? Double else { break }
             mainVolume = max(0, min(1, value))
-            if let muted = message["muted"] as? Bool { mainVolumeControl?.isMuted = muted }
+            if let muted = message["muted"] as? Bool { volumeControl?.isMuted = muted }
         case "tune":
             // The other Mac tunes: if this Mac shares, its music pauses meanwhile (30 s at most).
             let on = message["on"] as? Bool == true
@@ -431,7 +450,7 @@ final class Duet {
     /// One volume while this Mac plays the other's sound: a change there shows here, and a change
     /// here (keys, Control Center, menu) goes there.
     private func shareVolume() {
-        guard isReceiving, let peer, let control = mainVolumeControl else { return sharedVolume = nil }
+        guard isReceiving, let peer, let control = volumeControl else { return sharedVolume = nil }
         let mine = (volume: mainVolume, muted: control.isMuted)
         if sharedVolume?.volume != peer.volume || sharedVolume?.muted != peer.muted {
             sharedVolume = (peer.volume, peer.muted)
@@ -445,11 +464,25 @@ final class Duet {
         }
     }
 
-    private func watchMainVolume() {
-        let device = outputs.first(where: \.isBuiltIn)?.id
-        guard device != mainVolumeControl?.device else { return }
-        mainVolumeControl = device.map(SystemVolume.init(device:))
-        volumeObservers = mainVolumeControl?.observe { [weak self] in MainActor.assumeIsolated { self?.update() } } ?? []
+    /// Watches the speakers' volume and, while it exists, the volume of Ensemble's sound device (`device`),
+    /// which starts at the speakers' volume and then leads it.
+    private func watchVolumes(device: AudioObjectID?) {
+        let builtIn = outputs.first(where: \.isBuiltIn)?.id
+        if builtIn != mainVolumeControl?.device {
+            mainVolumeControl = builtIn.map(SystemVolume.init(device:))
+            volumeObservers = mainVolumeControl?.observe { [weak self] in MainActor.assumeIsolated { self?.update() } } ?? []
+        }
+        if device != deviceVolume?.device {
+            deviceVolume = device.map(SystemVolume.init(device:))
+            if let deviceVolume, let speakers = mainVolumeControl {
+                deviceVolume.position = speakers.position
+                deviceVolume.isMuted = speakers.isMuted
+            }
+            deviceVolumeObservers = deviceVolume?.observe { [weak self] in MainActor.assumeIsolated { self?.update() } } ?? []
+        }
+        guard let deviceVolume, let speakers = mainVolumeControl else { return }
+        if abs(speakers.position - deviceVolume.position) > 0.001 { speakers.position = deviceVolume.position }
+        if speakers.isMuted != deviceVolume.isMuted { speakers.isMuted = deviceVolume.isMuted }
     }
 
     /// The main output's device applies this Mac's volume itself; the others get it as gain. The other
