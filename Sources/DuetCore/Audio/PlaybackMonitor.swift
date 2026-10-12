@@ -23,9 +23,10 @@ public final class PlaybackMonitor {
     private func refresh() {
         let processes = (try? CA.array(CA.system, kAudioHardwarePropertyProcessObjectList, as: AudioObjectID.self)) ?? []
         // The system announces a process starting or stopping all its audio, and a device starting or
-        // stopping for anyone (an app that records and then also plays shows only there).
+        // stopping for anyone (an app that records and then also plays shows only there; Ensemble's own
+        // sound device included).
         let triggers = processes.map { ($0, kAudioProcessPropertyIsRunning) }
-            + OutputDevice.all().map { ($0.id, kAudioDevicePropertyDeviceIsRunningSomewhere) }
+            + OutputDevice.allDeviceIDs().map { ($0, kAudioDevicePropertyDeviceIsRunningSomewhere) }
         watched = Dictionary(uniqueKeysWithValues: triggers.map { id, selector in
             (id, watched[id] ?? CA.listen(id, selector, queue: .main) { [weak self] in self?.refresh() })
         })

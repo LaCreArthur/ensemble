@@ -14,10 +14,14 @@ import os
 /// its output is headphones. Turning Duet on on one Mac turns it off on the other (the later switch
 /// wins). While one Mac plays the other's sound, both Macs have one volume: the volume keys, Control
 /// Center or the menu on either Mac set it, mute included; each output also has its own share of it,
-/// set on its Mac. The other Mac's menu and media keys control the music: play/pause, tracks. A Bluetooth output puts a Mac on standby (headphones: private
-/// listening) unless it is ticked as a speaker; the slowest ticked output sets the delay. While a Mac shares, apps play to
-/// Ensemble's sound device when it is installed: it reports the delay as its latency, so video waits for the sound. The microphone tune on either Mac aligns its outputs, then the other Mac, as heard there. The capture runs only while some app plays sound, and for a while after, because
-/// running audio keeps the Mac from sleeping.
+/// set on its Mac. The other Mac's menu and media keys control the music: play/pause, tracks. A
+/// Bluetooth output puts a Mac on standby (headphones: private listening) unless it is ticked as a
+/// speaker. The slowest ticked output sets the delay, and a paired Mac always leaves room in it for
+/// the other Mac, so the delay does not change when the other Mac comes or goes. While a Mac shares,
+/// apps play to Ensemble's sound device when it is installed: it reports the delay as its latency,
+/// so video waits for the sound. The microphone tune on either Mac aligns its outputs, then the other
+/// Mac, as heard there. The capture runs only while some app plays sound, and for a while after,
+/// because running audio keeps the Mac from sleeping.
 @MainActor @Observable
 final class Duet {
     // MARK: Remembered settings
@@ -44,6 +48,8 @@ final class Duet {
     /// Seconds this Mac's sound is heard later than its clock and devices say, measured by a tune
     /// across both Macs (0 on at least one of them).
     private var trim: Double { didSet { store.set(trim, forKey: "trim"); engine?.latencyTrim.value = Float(trim) } }
+    /// The other Mac's lead (seconds) as it last said, so the delay is right before it connects.
+    private var peerLead: Double { didSet { store.set(peerLead, forKey: "peerLead") } }
 
     var openAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
@@ -129,9 +135,10 @@ final class Duet {
     /// Keeps App Nap away from the stream threads while sound plays.
     private var activity: NSObjectProtocol? { didSet { if let oldValue { ProcessInfo.processInfo.endActivity(oldValue) } } }
 
-    /// Lead time the other Mac gets: the sound is delayed this much here while it plays there. With the
-    /// first copy of both routes, 99.9% of packets come within 17 ms, but while Universal Control rebuilds
-    /// its direct link (every few minutes when idle) both routes stall up to about 150 ms.
+    /// Lead time the other Mac gets: while paired, the sound is delayed this much here, whether or not
+    /// it plays there. With the first copy of both routes, 99.9% of packets come within 17 ms, but while
+    /// Universal Control rebuilds its direct link (every few minutes when idle) both routes stall up to
+    /// about 150 ms.
     static let networkDelay = 0.15
     /// Seconds from an app handing its sound to its output to that sound entering Ensemble's timeline:
     /// macOS's capture (about 23 ms) and the engine's cycle (about 62 ms with 512-frame buffers), as
@@ -146,6 +153,7 @@ final class Duet {
         volumes = store.dictionary(forKey: "volumes") as? [String: Double] ?? [:]
         lags = store.dictionary(forKey: "lags") as? [String: Double] ?? [:]
         trim = store.double(forKey: "trim")
+        peerLead = store.double(forKey: "peerLead")
         var id = store.string(forKey: "deviceID") ?? ""
         if id.isEmpty {
             id = UUID().uuidString
@@ -211,7 +219,7 @@ final class Duet {
         // The built-in speakers always drive the timing, silent if not ticked.
         let devices = [main].compactMap { $0 } + outputs.filter { $0.uid != main?.uid && chosenOutputs.contains($0.uid) }
         let localLead = main.flatMap { main in devices.map { Engine.lead(of: $0, lag: lag($0), main: main) }.max() } ?? 0
-        let delay = peer?.canPlay == true ? max(localLead, Self.networkDelay + (peer?.lead ?? 0)) : localLead
+        let delay = link.pairing != nil ? max(localLead, Self.networkDelay + peerLead) : localLead
         let system = OutputDevice.defaultOutput()
         let headphones = system.flatMap { $0.isBluetooth && !chosenOutputs.contains($0.uid) ? $0 : nil }
         let sharing = isOn && !devices.isEmpty
@@ -389,7 +397,9 @@ final class Duet {
     private func received(_ message: [String: Any]) {
         switch message["t"] as? String {
         case "state":
-            peer = PeerState(message)
+            let state = PeerState(message)
+            peer = state
+            if peerLead != state.lead { peerLead = state.lead }
             update()
         case "media":
             if isOn, let command = (message["cmd"] as? String).flatMap(MediaCommand.init(rawValue:)) { command.perform() }

@@ -436,6 +436,40 @@ case "device-path":
         print(String(format: "needed latency %.2f ms, capture path %.2f ms", needed * 1000, (needed - delay - main) * 1000))
     }
 
+case "start-time":
+    // Silent: how long the engine takes to start capturing an app that already plays (a silent child on
+    // the system output), and how much of that app's sound it misses (the monitor's reaction comes on top).
+    let names = (option("speakers") ?? "MacBook Pro Speakers").split(separator: ",").map { String($0) }
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    child.arguments = ["silence", "--seconds", "4"]
+    try child.run()
+    Thread.sleep(forTimeInterval: 1)
+    let probe = AcousticProbe()
+    let t0 = probe.now()
+    let engine = Engine(input: .captureOnly([child.processIdentifier]), outputs: names.map { device(named: $0) }, delaySeconds: 0.15)
+    for output in engine.outputs { output.gain.value = 0 }
+    try engine.start()
+    let t1 = probe.now()
+    while engine.ring.writeIndex == 0, probe.now() < t0 + 3 { Thread.sleep(forTimeInterval: 0.001) }
+    let t2 = probe.now()
+    Thread.sleep(forTimeInterval: 0.3)
+    let source = (engine.heardTime(ofFrame: 0) ?? .nan) - 0.15 - Double(engine.outputLatencyFrames) / engine.sampleRate - 0.086
+    print(String(format: "%@: start returned after %.0f ms, first capture after %.0f ms; the first frame captured left the app %.0f ms after the start began",
+                 names.joined(separator: " + "), (t1 - t0) * 1000, (t2 - t0) * 1000, (source - t0) * 1000))
+    engine.stop()
+    child.terminate()
+
+case "silence":
+    // Child for start-time: plays digital silence on the system output.
+    let output = try CA.scalar(CA.system, kAudioHardwarePropertyDefaultOutputDevice, as: AudioObjectID.self)
+    var proc: AudioDeviceIOProcID?
+    AudioDeviceCreateIOProcIDWithBlock(&proc, output, nil) { _, _, _, out, _ in
+        for b in UnsafeMutableAudioBufferListPointer(out) { if let d = b.mData { memset(d, 0, Int(b.mDataByteSize)) } }
+    }
+    AudioDeviceStart(output, proc)
+    Thread.sleep(forTimeInterval: Double(option("seconds") ?? "4")!)
+
 case "hold":
     // Runs the product engine (every app but this tool) on --speakers for --seconds.
     let names = (option("speakers") ?? "MacBook Pro Speakers,LG HDR 4K").split(separator: ",").map(String.init)
