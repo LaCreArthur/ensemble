@@ -55,6 +55,8 @@ public final class Engine: @unchecked Sendable {
     /// outputs[0] is the main output: its clock drives the engine and `anchor` refers to it. The
     /// main output's latency is the engine's latency; the others follow it on their own devices.
     public let outputs: [Output]
+    /// The outputs but the main one play only while this is true; the main output plays from start to stop.
+    public private(set) var othersRunning = false
     public let sampleRate: Double
     public let delayFrames: Int
     public let ring: FrameRing
@@ -100,7 +102,10 @@ public final class Engine: @unchecked Sendable {
         scratch.deallocate()
     }
 
-    public func start() throws {
+    public func start(othersRunning: Bool = true) throws {
+        // A capture runs all the time while this Mac shares and must not keep it awake: the apps it
+        // captures do, while they play. Playing the other Mac's stream is the only sound here, so it does.
+        try? CA.setScalar(CA.system, kAudioHardwarePropertySleepingIsAllowed, UInt32(receiver == nil ? 1 : 0))
         let tap = try makeTapDescription()
         if let tap { try check(AudioHardwareCreateProcessTap(tap, &tapID), "create process tap") }
 
@@ -126,16 +131,31 @@ public final class Engine: @unchecked Sendable {
             for output in outputs.dropFirst() {
                 let rate = output.device.nominalSampleRate
                 output.playhead = Playhead(ratio: sampleRate / rate)
-                output.latency = output.device.outputLatency
                 output.sound = .allocate(capacity: Self.maxFrames * 2)
                 try check(AudioDeviceCreateIOProcIDWithBlock(&output.procID, output.device.id, nil) { [unowned self, unowned output] _, _, _, buffers, outputTime in
                     self.follow(output, rate: rate, output: buffers, outputTime: outputTime)
                 }, "create IO proc for \(output.device.name)")
-                try check(AudioDeviceStart(output.device.id, output.procID), "start \(output.device.name)")
             }
+            try runOthers(othersRunning)
         } catch {
             stop()
             throw error
+        }
+    }
+
+    /// Starts or stops the outputs but the main one. Each one started plays at once the frame the main
+    /// output plays when it is heard, so a sound captured less than the delay ago is still heard whole.
+    public func runOthers(_ run: Bool) throws {
+        guard run != othersRunning else { return }
+        othersRunning = run
+        for output in outputs.dropFirst() {
+            guard let procID = output.procID else { continue }
+            if run {
+                output.latency = output.device.outputLatency
+                try check(AudioDeviceStart(output.device.id, procID), "start \(output.device.name)")
+            } else {
+                AudioDeviceStop(output.device.id, procID)
+            }
         }
     }
 
@@ -146,6 +166,7 @@ public final class Engine: @unchecked Sendable {
             AudioDeviceDestroyIOProcID(output.device.id, procID)
             output.procID = nil
         }
+        othersRunning = false
         if let procID {
             AudioDeviceStop(aggregateID, procID)
             AudioDeviceDestroyIOProcID(aggregateID, procID)

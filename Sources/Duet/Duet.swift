@@ -20,8 +20,9 @@ import os
 /// the other Mac, so the delay does not change when the other Mac comes or goes. While a Mac shares,
 /// apps play to Ensemble's sound device when it is installed: it reports the delay as its latency,
 /// so video waits for the sound. The microphone tune on either Mac aligns its outputs, then the other
-/// Mac, as heard there. The capture runs only while some app plays sound, and for a while after,
-/// because running audio keeps the Mac from sleeping.
+/// Mac, as heard there. While a Mac shares, its capture and main output run all the time, without
+/// keeping the Mac awake (the apps that play do), so the start of a sound is never lost; its other
+/// outputs and the stream to the other Mac start with the sound and stop 5 minutes after it.
 @MainActor @Observable
 final class Duet {
     // MARK: Remembered settings
@@ -187,6 +188,11 @@ final class Duet {
         let lookAgain: @Sendable (Notification) -> Void = { [weak self] _ in MainActor.assumeIsolated { self?.link.lookAgain() } }
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main, using: lookAgain))
         observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main, using: lookAgain))
+        // Sleep stops every device and a Core Audio restart deletes the capture: after either, the
+        // engine starts again from scratch (it runs all day while this Mac shares).
+        let rebuild: @Sendable () -> Void = { [weak self] in MainActor.assumeIsolated { self?.restart(nil, playing: false); self?.update() } }
+        observers.append(DeviceEvents.observeRestart(rebuild))
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in rebuild() })
         monitor.onChange = { [weak self] _ in MainActor.assumeIsolated { self?.appsPlayingChanged() } }
         monitor.start()
         update()
@@ -239,14 +245,23 @@ final class Duet {
         let wanted = monitor.isPlaying || hold != nil || isTuning
         var desired: Config?
         if !devices.isEmpty, headphones == nil {
-            if isOn, wanted {
+            if isOn {
                 desired = Config(outputs: devices.map(\.uid), delay: delay, input: .capture)
             } else if !isOn, let peer, let session, peer.on, !peer.stream.isEmpty {
                 let input = Input.stream(name: peer.stream, session: ObjectIdentifier(session.crypto))
                 desired = Config(outputs: devices.map(\.uid), delay: localLead, input: input)
             }
         }
-        if desired != running { restart(desired) }
+        let playing = desired != nil && (desired?.input != .capture || wanted)
+        if desired != running { restart(desired, playing: playing) }
+        if let engine, engine.othersRunning != playing {
+            log.notice("other outputs \(playing ? "start" : "stop", privacy: .public)")
+            do { try engine.runOthers(playing) } catch { log.error("cannot start: \(String(describing: error), privacy: .public)") }
+        }
+        isPlaying = engine != nil && playing
+        if isPlaying != (activity != nil) {
+            activity = isPlaying ? ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical], reason: "Playing sound") : nil
+        }
         updateSender(session: session, peerPlays: peer?.canPlay == true)
 
         let peerName = session?.peer.name ?? link.pairing?.peer.name ?? "the other Mac"
@@ -260,17 +275,16 @@ final class Duet {
             status = "Off"
         } else if names.isEmpty {
             status = "Playing nowhere: tick an output"
-        } else if !wanted {
-            status = "Ready for sound on " + names
         } else if engine == nil {
             status = "Cannot capture the sound"
+        } else if !wanted {
+            status = "Ready for sound on " + names
         } else {
             status = isTuning ? "Tuning: listening to each output…" : "Playing on " + names
         }
-        isPlaying = engine != nil
         otherMacStatus = otherMacText(peer: peer, session: session)
         guide = Guide(denied: link.denied, found: !link.nearby.isEmpty || session != nil, paired: link.pairing != nil,
-                      playing: isReceiving || engine != nil && peer?.canPlay == true)
+                      playing: isReceiving || sender != nil)
         shareVolume()
         applyVolumes()
         updateNowPlaying()
@@ -295,7 +309,7 @@ final class Duet {
     /// Seconds an output is heard after the latency its device reports, as the tune measured.
     private func lag(_ device: OutputDevice) -> Double { lags[device.uid] ?? 0 }
 
-    private func restart(_ config: Config?) {
+    private func restart(_ config: Config?, playing: Bool) {
         stopSender()
         receiver?.stop()
         receiver = nil
@@ -308,7 +322,6 @@ final class Duet {
         healthTimer?.invalidate()
         healthTimer = nil
         running = config
-        activity = nil
         guard let config else { return log.notice("stopped") }
         let devices = config.outputs.compactMap { uid in outputs.first { $0.uid == uid } }
         let input: Engine.Input
@@ -329,7 +342,7 @@ final class Duet {
         for output in engine.outputs { output.lag.value = Float(lag(output.device)) }
         engine.latencyTrim.value = Float(trim)
         do {
-            try engine.start()
+            try engine.start(othersRunning: playing)
         } catch {
             log.error("cannot start: \(String(describing: error), privacy: .public)")
             receiver?.stop()
@@ -352,13 +365,12 @@ final class Duet {
                 }
             }
         }
-        activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical], reason: "Playing sound")
         applyVolumes()
     }
 
-    /// The stream to the other Mac runs while this Mac captures its sound and the other Mac plays along.
+    /// The stream to the other Mac runs while this Mac plays its captured sound and the other Mac plays along.
     private func updateSender(session: Link.Session?, peerPlays: Bool) {
-        let wanted = running?.input == .capture && peerPlays && session != nil
+        let wanted = isPlaying && running?.input == .capture && peerPlays && session != nil
         if !wanted || sender?.crypto !== session?.crypto { stopSender() }
         guard wanted, sender == nil, let engine, let session, let sender = try? StreamSender(engine: engine, crypto: session.crypto) else { return }
         sender.start()

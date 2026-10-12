@@ -42,4 +42,9 @@ public enum DeviceEvents {
             CA.listen(CA.system, $0, queue: .main, block)
         }
     }
+
+    /// Core Audio restarted: every device, tap and aggregate made before is gone.
+    public static func observeRestart(_ block: @escaping @Sendable () -> Void) -> AnyObject {
+        CA.listen(CA.system, kAudioHardwarePropertyServiceRestarted, queue: .main, block)
+    }
 }

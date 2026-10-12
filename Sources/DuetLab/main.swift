@@ -436,6 +436,22 @@ case "device-path":
         print(String(format: "needed latency %.2f ms, capture path %.2f ms", needed * 1000, (needed - delay - main) * 1000))
     }
 
+case "sleep-check":
+    // Silent: runs a capture on the speakers (gain 0) with this process's sleeping-is-allowed set to
+    // --allowed, then flips it after 3 s; list coreaudiod's sleep blocks meanwhile (pmset -g assertions).
+    var allowed = UInt32(option("allowed") ?? "1")!
+    try CA.setScalar(CA.system, kAudioHardwarePropertySleepingIsAllowed, allowed)
+    let engine = Engine(input: .captureOnly([getpid()]), outputs: [device(named: "MacBook Pro Speakers")], delaySeconds: 0.15)
+    engine.outputs[0].gain.value = 0
+    try engine.start()
+    print("pid \(getpid()), sleeping allowed \(allowed)")
+    Thread.sleep(forTimeInterval: 3)
+    allowed = 1 - allowed
+    try CA.setScalar(CA.system, kAudioHardwarePropertySleepingIsAllowed, allowed)
+    print("sleeping allowed \(allowed)")
+    Thread.sleep(forTimeInterval: 3)
+    engine.stop()
+
 case "start-time":
     // Silent: how long the engine takes to start capturing an app that already plays (a silent child on
     // the system output), and how much of that app's sound it misses (the monitor's reaction comes on top).
@@ -459,6 +475,50 @@ case "start-time":
                  names.joined(separator: " + "), (t1 - t0) * 1000, (t2 - t0) * 1000, (source - t0) * 1000))
     engine.stop()
     child.terminate()
+
+case "first-frame":
+    // Silent: does a running capture get an app's sound from its first frame? A child starts playing
+    // a 10 ms marker at -90 dB one second after the capture starts; count the marker frames captured.
+    // --global: capture every process but this one, the child being new to Core Audio (as the product).
+    let global = args.contains("--global")
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    child.arguments = global ? ["marker", "--late"] : ["marker"]
+    try child.run()
+    Thread.sleep(forTimeInterval: 0.5)
+    let input: Engine.Input = global ? .captureAllExcept([getpid()]) : .captureOnly([child.processIdentifier])
+    let engine = Engine(input: input, outputs: [device(named: "MacBook Pro Speakers")], delaySeconds: 0.15)
+    engine.outputs[0].gain.value = 0
+    try engine.start()
+    Thread.sleep(forTimeInterval: 2.5)
+    let end = engine.ring.writeIndex
+    let count = min(end, engine.ring.capacity / 2)
+    var frames = [Float](repeating: 0, count: count * 2)
+    _ = frames.withUnsafeMutableBufferPointer { engine.ring.read(at: end - count, frames: count, into: $0.baseAddress!) }
+    let marked = (0..<count).filter { abs(frames[2 * $0]) > 1e-5 }
+    let loud = (0..<count).filter { abs(frames[2 * $0]) > 1e-4 }.count
+    print("marker frames captured: \(marked.count) of 480, from frame \(marked.first.map { $0 + end - count } ?? -1) to \(marked.last.map { $0 + end - count } ?? -1); louder frames (other apps): \(loud)")
+    engine.stop()
+    child.terminate()
+
+case "marker":
+    // Child for first-frame: one second after launch, plays 480 frames at -90 dB, then silence. It
+    // connects to Core Audio at launch, or only then with --late.
+    if args.contains("--late") { Thread.sleep(forTimeInterval: 1.5) }
+    let output = try CA.scalar(CA.system, kAudioHardwarePropertyDefaultOutputDevice, as: AudioObjectID.self)
+    if !args.contains("--late") { Thread.sleep(forTimeInterval: 1) }
+    var proc: AudioDeviceIOProcID?
+    var played = 0
+    AudioDeviceCreateIOProcIDWithBlock(&proc, output, nil) { _, _, _, out, _ in
+        for b in UnsafeMutableAudioBufferListPointer(out) {
+            guard let d = b.mData?.assumingMemoryBound(to: Float.self) else { continue }
+            let channels = Int(b.mNumberChannels), n = Int(b.mDataByteSize) / 4 / max(1, channels)
+            for i in 0..<n { for c in 0..<channels { d[i * channels + c] = played + i < 480 ? 3e-5 : 0 } }
+        }
+        played += Int(UnsafeMutableAudioBufferListPointer(out)[0].mDataByteSize) / 4 / max(1, Int(UnsafeMutableAudioBufferListPointer(out)[0].mNumberChannels))
+    }
+    AudioDeviceStart(output, proc)
+    Thread.sleep(forTimeInterval: 2)
 
 case "silence":
     // Child for start-time: plays digital silence on the system output.
