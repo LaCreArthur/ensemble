@@ -6,6 +6,8 @@
     <key>CFBundleName</key><string>Ensemble</string>
     <key>CFBundleDisplayName</key><string>Ensemble</string>
     <key>CFBundleExecutable</key><string>Ensemble</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>NSHumanReadableCopyright</key><string>© 2026 Arthur Scheidel. MIT License.</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundleVersion</key><string>1</string>

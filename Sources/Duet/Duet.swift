@@ -19,7 +19,7 @@ import os
 /// speaker. The slowest ticked output sets the delay, and a paired Mac always leaves room in it for
 /// the other Mac, so the delay does not change when the other Mac comes or goes. While a Mac shares,
 /// apps play to Ensemble's sound device when it is installed: it reports the delay as its latency,
-/// so video waits for the sound. The microphone tune on either Mac aligns its outputs, then the other
+/// so video waits for the sound; the app installs that device when the user asks. The microphone tune on either Mac aligns its outputs, then the other
 /// Mac, as heard there. While a Mac shares, its capture and main output run all the time, without
 /// keeping the Mac awake (the apps that play do), so the start of a sound is never lost; its other
 /// outputs and the stream to the other Mac start with the sound and stop 5 minutes after it.
@@ -67,6 +67,10 @@ final class Duet {
     private(set) var isTuning = false
     /// Where the first use stands, for the guide.
     private(set) var guide = Guide()
+    /// True while this Mac shares without Ensemble's sound device (or with another version): video runs ahead.
+    private(set) var needsDevice = false
+    /// The newest release, when it is newer than this app.
+    private(set) var newRelease: (version: String, page: URL)?
     /// This Mac's own volume (0...1), the volume of both Macs while one plays the other's sound; setting it sets the Mac's volume.
     var mainVolume: Double = 1 { didSet { if abs(Double(volumeControl?.position ?? 1) - mainVolume) > 0.001 { volumeControl?.position = Float(mainVolume) } } }
     /// What the other Mac last said about itself; nil without a session.
@@ -196,6 +200,10 @@ final class Duet {
         monitor.onChange = { [weak self] _ in MainActor.assumeIsolated { self?.appsPlayingChanged() } }
         monitor.start()
         update()
+        checkForUpdate()
+        observers.append(Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkForUpdate() }
+        })
     }
 
     func volume(_ key: String) -> Double { volumes[key] ?? 1 }
@@ -205,6 +213,25 @@ final class Duet {
     func control(_ command: MediaCommand) { link.send(["t": "media", "cmd": command.rawValue]) }
 
     func pair(with peer: Link.Peer) { link.pair(with: peer) }
+
+    /// Installs the app's sound device. Core Audio then restarts, and the engine with it.
+    func installDevice() {
+        NSApp.activate()
+        if !EnsembleDevice.install() { log.notice("sound device not installed") }
+        update()
+    }
+
+    /// Asks GitHub for the latest release of Ensemble.
+    private func checkForUpdate() {
+        Task {
+            guard let (data, _) = try? await URLSession.shared.data(from: URL(string: "https://api.github.com/repos/LaCreArthur/duet/releases/latest")!),
+                  let release = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = release["tag_name"] as? String, let page = (release["html_url"] as? String).flatMap(URL.init(string:)) else { return }
+            let latest = String(tag.trimmingPrefix("v"))
+            let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+            newRelease = latest.compare(current, options: .numeric) == .orderedDescending ? (latest, page) : nil
+        }
+    }
 
     static func openLocalNetworkSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork")!)
@@ -283,6 +310,7 @@ final class Duet {
             status = isTuning ? "Tuning: listening to each output…" : "Playing on " + names
         }
         otherMacStatus = otherMacText(peer: peer, session: session)
+        needsDevice = isOn && EnsembleDevice.needsInstall
         guide = Guide(denied: link.denied, found: !link.nearby.isEmpty || session != nil, paired: link.pairing != nil,
                       playing: isReceiving || sender != nil)
         shareVolume()

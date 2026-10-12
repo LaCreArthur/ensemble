@@ -56,6 +56,7 @@ struct WelcomeView: View {
             step(3, current, "Play a sound on both Macs") {
                 Text("On the Mac whose sound you want on both, turn on sharing and play some music. When macOS asks, allow Ensemble to record the sound.")
                 Toggle("Share this Mac's sound", isOn: $duet.isOn).toggleStyle(.switch)
+                if duet.needsDevice { DeviceInstall(duet: duet) }
             }
             Divider()
             HStack(spacing: 6) {
@@ -99,6 +100,7 @@ struct DuetMenu: View {
                     .help("On: this Mac's sound plays here and on the other Mac.")
             }
             Text(duet.status).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if duet.needsDevice { DeviceInstall(duet: duet) }
             if duet.isReceiving {
                 HStack(spacing: 22) {
                     Button { duet.control(.previous) } label: { Image(systemName: "backward.fill") }
@@ -135,6 +137,9 @@ struct DuetMenu: View {
             Divider()
             Button(duet.isTuning ? "Tuning…" : "Tune sync with the microphone") { duet.tuneSync() }
                 .disabled(!duet.isPlaying || duet.isTuning)
+            if let release = duet.newRelease {
+                Button("Get Ensemble \(release.version)…") { NSWorkspace.shared.open(release.page) }
+            }
             Toggle("Open at login", isOn: Binding(get: { duet.openAtLogin }, set: { duet.openAtLogin = $0 }))
             Button("Quit Ensemble") { NSApplication.shared.terminate(nil) }
         }
@@ -153,5 +158,18 @@ struct DuetMenu: View {
             Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary)
         }
         .labelsHidden()
+    }
+}
+
+/// Offers to install Ensemble's sound device, which makes video wait for the sound.
+struct DeviceInstall: View {
+    let duet: Duet
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Video runs ahead of the sound until you install Ensemble's sound device. Your Mac asks for your password, and the sound stops for a second.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Button("Install Sound Device…") { duet.installDevice() }
+        }
     }
 }

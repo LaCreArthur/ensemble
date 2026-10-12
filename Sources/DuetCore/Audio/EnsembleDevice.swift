@@ -4,7 +4,8 @@ import Foundation
 /// Ensemble's sound device (Driver/EnsembleDevice.c), when installed. While this Mac shares its sound,
 /// apps play to it and Ensemble captures them as from any output; the device reports the delay as its
 /// latency, so video players hold the picture back to match. It exists only while Ensemble asks for it,
-/// and goes when Ensemble exits. Without the driver, every call here does nothing.
+/// and goes when Ensemble exits. Without the driver, every call here does nothing. The app carries the
+/// driver and installs it on request.
 public enum EnsembleDevice {
     static let uid = "com.lacrearthur.duet.device"
     /// On the plug-in: the device's latency in frames, -1 for no device (a property list number).
@@ -38,6 +39,32 @@ public enum EnsembleDevice {
            (current?.takeRetainedValue() as? NSNumber)?.intValue == frames { return }
         var value: CFPropertyList = NSNumber(value: frames)
         _ = withUnsafePointer(to: &value) { AudioObjectSetPropertyData(plugIn, &address, 0, nil, UInt32(MemoryLayout<CFPropertyList>.size), $0) }
+    }
+
+    /// True when the app carries a driver that Core Audio does not run: none installed, another
+    /// version installed, or installed but not yet loaded.
+    public static var needsInstall: Bool {
+        guard let bundled = Bundle.main.url(forResource: "EnsembleDevice", withExtension: "driver") else { return false }
+        return translate(kAudioHardwarePropertyTranslateBundleIDToPlugIn, uid) == nil || version(installed) != version(bundled)
+    }
+
+    /// Copies the app's driver into the system (macOS asks for an administrator password), then restarts
+    /// Core Audio so it loads it: every sound stops for a moment. False if the user cancels or it fails.
+    public static func install() -> Bool {
+        guard let bundled = Bundle.main.url(forResource: "EnsembleDevice", withExtension: "driver") else { return false }
+        let literal = { (path: String) in "quoted form of \"" + path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
+        let source = """
+            do shell script "/bin/rm -rf " & \(literal(installed.path)) & " && /usr/bin/ditto --noqtn " & \(literal(bundled.path)) & " " & \(literal(installed.path)) & " && /usr/bin/killall coreaudiod" with administrator privileges
+            """
+        var error: NSDictionary?
+        NSAppleScript(source: source)?.executeAndReturnError(&error)
+        return error == nil
+    }
+
+    private static let installed = URL(fileURLWithPath: "/Library/Audio/Plug-Ins/HAL/EnsembleDevice.driver")
+
+    private static func version(_ driver: URL) -> String? {
+        NSDictionary(contentsOf: driver.appending(path: "Contents/Info.plist"))?["CFBundleVersion"] as? String
     }
 
     private static func translate(_ selector: AudioObjectPropertySelector, _ key: String) -> AudioObjectID? {
