@@ -14,7 +14,7 @@ Playbook: ~/workspace/harness/memory/duet/ (test rig, network findings, audio fi
 1. Arthur's go to make the repo public (`gh repo edit LaCreArthur/duet --visibility public --accept-visibility-change-consequences`). History holds no secret (checked: only a LAN address default and a deleted key's name).
 2. B: install the v1.0 DMG (Arthur downloads it from the release), click Install Sound Device in the menu, check B shares in sync.
 3. Release test on another pair of Macs: fresh unpaired install (guide steps 1 to 4), deny Local Network once, stream health without Universal Control, re-measure the capture path (`duet-lab device-path --device Ensemble`).
-4. Next release: bump CFBundleShortVersionString and CFBundleVersion by editing the lines (PlistBuddy rewrites the whole file), and the driver's CFBundleVersion if the driver changed; `scripts/release.sh`; `gh release create v<version> build/Ensemble-<version>.dmg`.
+4. Next release: bump CFBundleShortVersionString and CFBundleVersion by editing the lines (PlistBuddy rewrites the whole file), and the driver's CFBundleVersion if the driver changed; `scripts/release.sh`; `gh release create v<version> build/Ensemble.dmg` (the README's download button links releases/latest/download/Ensemble.dmg).
 5. Parked: groups of 3+ Macs (pairing becomes a group key, the sharer streams to every member, the delay covers the slowest). Arthur has no third Mac to test with (2026-10-13); open risk: Wi-Fi load on the 0.15 s budget.
 
 ## Do not redo

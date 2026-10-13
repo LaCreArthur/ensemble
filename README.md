@@ -1,7 +1,22 @@
-# Ensemble
+<p align="center"><img src="docs/icon.png" width="128" alt="Ensemble icon"></p>
+<h1 align="center">Ensemble</h1>
 
-Ensemble plays your Mac's sound on all your speakers at once, in sync: the Mac's own speakers,
-Bluetooth speakers, displays, and your other Mac. It lives in the menu bar.
+<p align="center">
+  Play your Mac's sound on all your speakers at once, and on your other Mac, in sync.<br>
+  Built-in speakers, Bluetooth, displays: one sound, one volume, video in sync. It lives in the menu bar.<br>
+  Free and open source. No account, no tracking.
+</p>
+
+<p align="center">
+  <a href="https://github.com/LaCreArthur/duet/releases/latest/download/Ensemble.dmg"><img src="https://img.shields.io/badge/Download_for_macOS-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" height="40"></a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/macOS-26%2B-000000?logo=apple&logoColor=white" alt="macOS 26 or later">
+  <img src="https://img.shields.io/badge/Apple_silicon_and_Intel-universal-3a3a3c" alt="Universal app">
+  <img src="https://img.shields.io/badge/notarized-Developer_ID-3a3a3c" alt="Notarized by Apple">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-30D49B" alt="MIT license"></a>
+</p>
 
 - Every app's sound, on every speaker you tick, heard together.
 - Video stays in sync: players hold the picture back by the same delay as the sound.
@@ -15,8 +30,8 @@ macOS 26 or later (Apple silicon or Intel). For a second Mac: the same, on the s
 
 ## Install
 
-1. Download `Ensemble-<version>.dmg` from [Releases](../../releases/latest) and drag Ensemble to
-   Applications.
+1. Download [Ensemble.dmg](../../releases/latest/download/Ensemble.dmg) (all versions: [Releases](../../releases))
+   and drag Ensemble to Applications.
 2. Open Ensemble. Its setup guide takes you through three steps, and says why before macOS asks anything:
    - install Ensemble's sound device, which keeps video in sync (macOS asks for your password);
    - turn on **Share this Mac's sound**, tick your speakers, and allow Ensemble to record the sound;
