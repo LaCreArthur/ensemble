@@ -2,8 +2,8 @@
 <h1 align="center">Ensemble</h1>
 
 <p align="center">
-  Play your Mac's sound on all your speakers at once, and on your other Mac, in sync.<br>
-  Built-in speakers, Bluetooth, displays: one sound, one volume, video in sync. It lives in the menu bar.<br>
+  <b>All your speakers and your other Mac, as one. Video stays lip-synced.</b><br>
+  Built-in speakers, Bluetooth, displays, a second Mac: one sound, one volume, from the menu bar.<br>
   Free and open source. No account, no tracking.
 </p>
 
@@ -18,11 +18,32 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-30D49B" alt="MIT license"></a>
 </p>
 
-- Every app's sound, on every speaker you tick, heard together.
-- Video stays in sync: players hold the picture back by the same delay as the sound.
-- Add your other Mac: it plays along, and its menu and media keys play, pause and skip.
-- One volume for everything: the volume keys on either Mac set it.
-- Tune the sync with the microphone, for speakers that report their delay wrong.
+## Why Ensemble
+
+- **Video stays lip-synced.** Bluetooth and a second Mac play the sound late. Ensemble's own sound
+  device tells video players that delay, so they hold the picture back to match.
+- **Your other Mac plays along**, 0.15 s behind, over your local network, encrypted. Its media keys
+  play, pause and skip.
+- **One volume.** The volume keys on either Mac move every speaker.
+- **Every app's sound**, on every speaker you tick, heard together. Tune the sync with the microphone
+  for speakers that report their delay wrong.
+- **Free and open source** (MIT), notarized by Apple.
+
+## How it compares
+
+| | Ensemble | macOS Multi-Output | [Tutti](https://github.com/BarryBarrywu/tutti) | [FineTune](https://github.com/ronitsingh10/FineTune) | [Airfoil](https://rogueamoeba.com/airfoil/mac/) |
+|---|---|---|---|---|---|
+| Price | Free | Free | Free, Pro $7.99 | Free | Paid |
+| Open source | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Several speakers on one Mac | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Your other Mac plays along | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Video in sync, in any player | ✅ | ? | ? | ? | ? |
+| Volume keys move every speaker | ✅ | ❌ | ✅ | ❌ | ? |
+| AirPlay, Sonos, phones | ❌ | ? | ❌ | ❌ | ✅ |
+| Per-app volume and EQ | ❌ | ❌ | ✅ | ✅ | ? |
+
+? = not measured yet. Pick something else if you need AirPlay or Sonos speakers (Airfoil), or volume
+and EQ per app (FineTune, Tutti).
 
 ## Requirements
 
@@ -46,22 +67,6 @@ The sound and the controls go only to the Mac you paired, if any, on your local 
 the two Macs made when you paired them (ChaCha20-Poly1305). The key stays in your login keychain. The
 microphone is used only while you tune the sync. Once a day Ensemble asks GitHub for its latest version;
 it sends nothing else anywhere.
-
-## How it compares
-
-| | Ensemble | macOS Multi-Output | [Tutti](https://github.com/BarryBarrywu/tutti) | [FineTune](https://github.com/ronitsingh10/FineTune) | [Airfoil](https://rogueamoeba.com/airfoil/mac/) |
-|---|---|---|---|---|---|
-| Price | Free | Free | Free, Pro $7.99 | Free | Paid |
-| Open source | ✅ | ❌ | ❌ | ✅ | ❌ |
-| Several speakers on one Mac | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Your other Mac plays along | ✅ | ❌ | ❌ | ❌ | ✅ |
-| Video in sync, in any player | ✅ | ? | ? | ? | ? |
-| Volume keys move every speaker | ✅ | ❌ | ✅ | ❌ | ? |
-| AirPlay, Sonos, phones | ❌ | ? | ❌ | ❌ | ✅ |
-| Per-app volume and EQ | ❌ | ❌ | ✅ | ✅ | ? |
-
-? = not measured yet. Pick something else if you need AirPlay or Sonos speakers (Airfoil), or volume
-and EQ per app (FineTune, Tutti).
 
 ## Uninstall
 
