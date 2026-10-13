@@ -67,7 +67,7 @@ struct WelcomeView: View {
                 Text("Ensemble lives in the menu bar:")
                 Image(systemName: "hifispeaker.2")
                 Spacer()
-                Link("Source code", destination: URL(string: "https://github.com/LaCreArthur/duet")!).foregroundStyle(.tint)
+                Link("Source code", destination: URL(string: "https://github.com/LaCreArthur/ensemble")!).foregroundStyle(.tint)
                 Button("Done") { dismissWindow(id: "welcome") }.keyboardShortcut(.defaultAction).padding(.leading, 8)
             }
             .foregroundStyle(.secondary)

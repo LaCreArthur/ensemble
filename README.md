@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/LaCreArthur/duet/releases/latest/download/Ensemble.dmg"><img src="https://img.shields.io/badge/Download_for_macOS-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" height="40"></a>
+  <a href="https://github.com/LaCreArthur/ensemble/releases/latest/download/Ensemble.dmg"><img src="https://img.shields.io/badge/Download_for_macOS-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" height="40"></a>
 </p>
 
 <p align="center">

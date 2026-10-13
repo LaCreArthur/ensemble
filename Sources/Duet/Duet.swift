@@ -223,7 +223,7 @@ final class Duet {
     /// Asks GitHub for the latest release of Ensemble.
     private func checkForUpdate() {
         Task {
-            guard let (data, _) = try? await URLSession.shared.data(from: URL(string: "https://api.github.com/repos/LaCreArthur/duet/releases/latest")!),
+            guard let (data, _) = try? await URLSession.shared.data(from: URL(string: "https://api.github.com/repos/LaCreArthur/ensemble/releases/latest")!),
                   let release = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tag = release["tag_name"] as? String, let page = (release["html_url"] as? String).flatMap(URL.init(string:)) else { return }
             let latest = String(tag.trimmingPrefix("v"))
