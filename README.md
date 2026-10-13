@@ -97,6 +97,12 @@ scripts/release.sh   # Developer ID signed, notarized DMG in build/
 
 `duet-lab` (`swift run duet-lab`) holds the measurement tools used to tune the sync.
 
+## Contributing
+
+The most useful help is a [setup report](../../issues/new?template=setup_report.yml) from Macs and speakers
+we have not tried. To change the code, see [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[help wanted](../../labels/help%20wanted) ideas.
+
 ## License
 
 MIT

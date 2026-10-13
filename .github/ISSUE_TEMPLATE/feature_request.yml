@@ -1,0 +1,11 @@
+name: Idea
+description: Something Ensemble should do.
+labels: ["idea"]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you want to do
+      description: The situation and the result you want, not only the feature.
+    validations:
+      required: true

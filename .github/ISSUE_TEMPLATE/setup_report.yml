@@ -1,0 +1,39 @@
+name: Setup report
+description: Tell us how Ensemble works on your Macs and speakers, good or bad.
+labels: ["setup report"]
+body:
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Works well
+        - Works, with problems
+        - Does not work
+    validations:
+      required: true
+  - type: textarea
+    id: macs
+    attributes:
+      label: Macs
+      description: Model, chip and macOS version of each Mac. Are both signed in to the same Apple Account (Universal Control)?
+      placeholder: "MacBook Pro 14 M3, macOS 26.1 (shares)\nMac mini M1, macOS 26.0 (plays along)\nSame Apple Account: yes"
+    validations:
+      required: true
+  - type: textarea
+    id: speakers
+    attributes:
+      label: Speakers you ticked
+      placeholder: "Built-in speakers, Studio Display, JBL Flip 6 (Bluetooth)"
+    validations:
+      required: true
+  - type: textarea
+    id: heard
+    attributes:
+      label: What you heard and saw
+      description: Echo between speakers? Video ahead of or behind the sound? Cut-outs, and how often?
+  - type: input
+    id: version
+    attributes:
+      label: Ensemble version
+      placeholder: "1.0.1"
