@@ -47,6 +47,22 @@ the two Macs made when you paired them (ChaCha20-Poly1305). The key stays in you
 microphone is used only while you tune the sync. Once a day Ensemble asks GitHub for its latest version;
 it sends nothing else anywhere.
 
+## How it compares
+
+| | Ensemble | macOS Multi-Output | [Tutti](https://github.com/BarryBarrywu/tutti) | [FineTune](https://github.com/ronitsingh10/FineTune) | [Airfoil](https://rogueamoeba.com/airfoil/mac/) |
+|---|---|---|---|---|---|
+| Price | Free | Free | Free, Pro $7.99 | Free | Paid |
+| Open source | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Several speakers on one Mac | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Your other Mac plays along | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Video in sync, in any player | ✅ | ? | ? | ? | ? |
+| Volume keys move every speaker | ✅ | ❌ | ✅ | ❌ | ? |
+| AirPlay, Sonos, phones | ❌ | ? | ❌ | ❌ | ✅ |
+| Per-app volume and EQ | ❌ | ❌ | ✅ | ✅ | ? |
+
+? = not measured yet. Pick something else if you need AirPlay or Sonos speakers (Airfoil), or volume
+and EQ per app (FineTune, Tutti).
+
 ## Uninstall
 
 Quit Ensemble and delete it from Applications. To remove its sound device:
