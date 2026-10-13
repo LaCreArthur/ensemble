@@ -22,48 +22,55 @@ struct DuetApp: App {
     }
 }
 
-/// The first-use guide, shown at launch until this Mac is paired: each step turns green once done.
+/// The setup guide, shown at launch until this Mac is paired and from the menu: each step turns green
+/// once done, and says why macOS asks what it asks just before it does.
 struct WelcomeView: View {
     @Bindable var duet: Duet
     @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
         let guide = duet.guide
-        let current = !guide.found && !guide.paired ? 1 : !guide.paired ? 2 : !guide.playing ? 3 : 4
+        // Steps 2 to 4 go in order; the sound device (1) can go in at any point.
+        let current = !guide.found && !guide.paired ? 2 : !guide.paired ? 3 : !guide.playing ? 4 : 5
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 14) {
-                Image(systemName: "hifispeaker.2.fill").font(.system(size: 34)).foregroundStyle(.tint)
+                Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 52, height: 52)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Welcome to Ensemble").font(.title2.bold())
                     Text("Hear this Mac's sound on your other Mac too, in sync.").foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            step(1, current, "Open Ensemble on your other Mac") {
+            step(1, done: guide.device, active: true, "Keep video in sync") {
+                Text("Ensemble adds a sound device to this Mac, so video players hold the picture back to match the sound. macOS asks for your password, and the sound stops for a second.")
+                Button("Install Sound Device…") { duet.installDevice() }
+            }
+            step(2, done: current > 2, active: current == 2, "Open Ensemble on your other Mac") {
                 if guide.denied {
                     Text("macOS does not let Ensemble look for your other Mac. Allow it in Local Network settings.")
                     Button("Open Local Network Settings") { Duet.openLocalNetworkSettings() }
                 } else {
-                    Text("Install it there too. When macOS asks, allow Ensemble to find devices on your network.")
+                    Text("Install it there too. When macOS asks, allow Ensemble to find devices on your local network: this is how your two Macs find each other.")
                 }
             }
-            step(2, current, "Pair the two Macs") {
+            step(3, done: current > 3, active: current == 3, "Pair the two Macs") {
                 ForEach(duet.link.pairable, id: \.id) { peer in
                     Button("Pair with \(peer.name)…") { duet.pair(with: peer) }
                 }
                 Text("Both Macs then show a code. Click Pair on each Mac if the codes are the same.")
                 if let note = duet.link.note { Text(note).foregroundStyle(.secondary) }
             }
-            step(3, current, "Play a sound on both Macs") {
-                Text("On the Mac whose sound you want on both, turn on sharing and play some music. When macOS asks, allow Ensemble to record the sound.")
+            step(4, done: current > 4, active: current == 4, "Play a sound on both Macs") {
+                Text("On the Mac whose sound you want on both, turn on sharing and play something. When macOS asks, allow Ensemble to record this Mac's sound: it plays your apps on both Macs, and sends their sound only to the Mac you paired.")
                 Toggle("Share this Mac's sound", isOn: $duet.isOn).toggleStyle(.switch)
-                if duet.needsDevice { DeviceInstall(duet: duet) }
             }
             Divider()
             HStack(spacing: 6) {
-                Text(current > 3 ? "Ensemble works. It lives in the menu bar:" : "Ensemble lives in the menu bar:")
+                Text(current > 4 && guide.device ? "Ensemble works. It lives in the menu bar:" : "Ensemble lives in the menu bar:")
                 Image(systemName: "hifispeaker.2")
                 Spacer()
-                Button("Done") { dismissWindow(id: "welcome") }.keyboardShortcut(.defaultAction)
+                Link("Source code", destination: URL(string: "https://github.com/LaCreArthur/duet")!).foregroundStyle(.tint)
+                Button("Done") { dismissWindow(id: "welcome") }.keyboardShortcut(.defaultAction).padding(.leading, 8)
             }
             .foregroundStyle(.secondary)
         }
@@ -72,24 +79,25 @@ struct WelcomeView: View {
         .onAppear { NSApp.activate() }
     }
 
-    private func step(_ number: Int, _ current: Int, _ title: String, @ViewBuilder detail: () -> some View) -> some View {
+    private func step(_ number: Int, done: Bool, active: Bool, _ title: String, @ViewBuilder detail: () -> some View) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: number < current ? "checkmark.circle.fill" : "\(number).circle")
+            Image(systemName: done ? "checkmark.circle.fill" : "\(number).circle")
                 .font(.title2)
-                .foregroundStyle(number < current ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+                .foregroundStyle(done ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
             VStack(alignment: .leading, spacing: 8) {
                 Text(title).font(.headline)
-                if number == current {
+                if active && !done {
                     detail().font(.callout).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
-        .opacity(number > current ? 0.45 : 1)
+        .opacity(done || active ? 1 : 0.45)
     }
 }
 
 struct DuetMenu: View {
     @Bindable var duet: Duet
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -100,7 +108,11 @@ struct DuetMenu: View {
                     .help("On: this Mac's sound plays here and on the other Mac.")
             }
             Text(duet.status).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if duet.needsDevice { DeviceInstall(duet: duet) }
+            if duet.isOn && !duet.guide.device {
+                Text("Video runs ahead of the sound until you install Ensemble's sound device.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button("Install Sound Device…") { duet.installDevice() }
+            }
             if duet.isReceiving {
                 HStack(spacing: 22) {
                     Button { duet.control(.previous) } label: { Image(systemName: "backward.fill") }
@@ -140,6 +152,7 @@ struct DuetMenu: View {
             if let release = duet.newRelease {
                 Button("Get Ensemble \(release.version)…") { NSWorkspace.shared.open(release.page) }
             }
+            Button("Setup Guide…") { NSApp.activate(); openWindow(id: "welcome") }
             Toggle("Open at login", isOn: Binding(get: { duet.openAtLogin }, set: { duet.openAtLogin = $0 }))
             Button("Quit Ensemble") { NSApplication.shared.terminate(nil) }
         }
@@ -161,15 +174,3 @@ struct DuetMenu: View {
     }
 }
 
-/// Offers to install Ensemble's sound device, which makes video wait for the sound.
-struct DeviceInstall: View {
-    let duet: Duet
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Video runs ahead of the sound until you install Ensemble's sound device. Your Mac asks for your password, and the sound stops for a second.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Button("Install Sound Device…") { duet.installDevice() }
-        }
-    }
-}

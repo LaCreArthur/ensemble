@@ -67,8 +67,6 @@ final class Duet {
     private(set) var isTuning = false
     /// Where the first use stands, for the guide.
     private(set) var guide = Guide()
-    /// True while this Mac shares without Ensemble's sound device (or with another version): video runs ahead.
-    private(set) var needsDevice = false
     /// The newest release, when it is newer than this app.
     private(set) var newRelease: (version: String, page: URL)?
     /// This Mac's own volume (0...1), the volume of both Macs while one plays the other's sound; setting it sets the Mac's volume.
@@ -95,8 +93,9 @@ final class Duet {
     }
 
     struct Guide: Equatable {
-        /// `denied`: not allowed on the local network; `playing`: sound plays on both Macs.
-        var denied = false, found = false, paired = false, playing = false
+        /// `denied`: not allowed on the local network; `playing`: sound plays on both Macs; `device`: the
+        /// app's sound device is installed (video waits for the sound).
+        var denied = false, found = false, paired = false, playing = false, device = true
     }
 
     private enum Input: Equatable {
@@ -310,9 +309,8 @@ final class Duet {
             status = isTuning ? "Tuning: listening to each output…" : "Playing on " + names
         }
         otherMacStatus = otherMacText(peer: peer, session: session)
-        needsDevice = isOn && EnsembleDevice.needsInstall
         guide = Guide(denied: link.denied, found: !link.nearby.isEmpty || session != nil, paired: link.pairing != nil,
-                      playing: isReceiving || sender != nil)
+                      playing: isReceiving || sender != nil, device: !EnsembleDevice.needsInstall)
         shareVolume()
         applyVolumes()
         updateNowPlaying()

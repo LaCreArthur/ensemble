@@ -41,11 +41,10 @@ public enum EnsembleDevice {
         _ = withUnsafePointer(to: &value) { AudioObjectSetPropertyData(plugIn, &address, 0, nil, UInt32(MemoryLayout<CFPropertyList>.size), $0) }
     }
 
-    /// True when the app carries a driver that Core Audio does not run: none installed, another
-    /// version installed, or installed but not yet loaded.
+    /// True when the app carries a driver that is not the one installed: none, or another version.
     public static var needsInstall: Bool {
         guard let bundled = Bundle.main.url(forResource: "EnsembleDevice", withExtension: "driver") else { return false }
-        return translate(kAudioHardwarePropertyTranslateBundleIDToPlugIn, uid) == nil || version(installed) != version(bundled)
+        return version(installed) != version(bundled)
     }
 
     /// Copies the app's driver into the system (macOS asks for an administrator password), then restarts

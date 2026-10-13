@@ -18,14 +18,13 @@ Two Macs with macOS 26 or later (Apple silicon or Intel), on the same local netw
 
 1. Download `Ensemble-<version>.dmg` from [Releases](../../releases/latest) and drag Ensemble to
    Applications, on both Macs.
-2. Open Ensemble on both Macs. When macOS asks, allow it to find devices on your local network.
-3. Click **Pair with …** on one Mac. Both Macs show a code: click **Pair** on each if the codes match.
-4. On the Mac whose sound you want on both, turn on **Share this Mac's sound** and play something. When
-   macOS asks, allow Ensemble to record this Mac's sound.
-5. Click **Install Sound Device…** and type your password. This is what keeps video in sync; the sound
-   stops for a second while macOS loads it.
+2. Open Ensemble. Its setup guide takes you through four steps, and says why before macOS asks anything:
+   - install Ensemble's sound device, which keeps video in sync (macOS asks for your password);
+   - open Ensemble on your other Mac and allow it on your local network, so the Macs find each other;
+   - pair the two Macs: both show a code, click **Pair** on each if the codes match;
+   - turn on **Share this Mac's sound** on the Mac you want to hear, and allow it to record that sound.
 
-Ensemble opens at login; turn that off in its menu.
+Ensemble lives in the menu bar and opens at login; both the guide and the login setting are in its menu.
 
 ## Privacy
 
