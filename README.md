@@ -76,7 +76,7 @@ Quit Ensemble and delete it from Applications. To remove its sound device:
 sudo rm -rf /Library/Audio/Plug-Ins/HAL/EnsembleDevice.driver && sudo killall coreaudiod
 ```
 
-The pairing is the "Duet pairing" item in Keychain Access.
+The pairing is a Keychain Access item named after your other Mac (where: "Ensemble pairing").
 
 ## How it works
 

@@ -3,9 +3,10 @@ import Foundation
 import Security
 
 /// The pairing with the other Mac, kept as one item in the login keychain: account = the other
-/// Mac's ID, label = its name, data = the shared secret.
+/// Mac's ID, label = its name, data = the shared secret. Test builds stored it as "Duet pairing"; the
+/// released app, signed differently, would need the user's password to read that item, so it never looks.
 public enum PairingStore {
-    private static let service = "Duet pairing"
+    private static let service = "Ensemble pairing"
 
     public static func load() -> Link.Pairing? {
         let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: service,

@@ -19,7 +19,7 @@ Playbook: ~/workspace/harness/memory/duet/ (test rig, network findings, audio fi
 
 ## Do not redo
 - One aggregate for several outputs: it delays the main output by an amount no property shows.
-- Ids stay "duet" (bundle id, Bonjour types, Keychain service); the repo is LaCreArthur/ensemble since 2026-10-13 (GitHub redirects the old name, so v1.0.1 copies still find updates; never create a new repo named duet). Router channel fix: the Livebox is not ours.
+- Ids stay "duet" (bundle id, Bonjour types); the pairing keychain service is "Ensemble pairing" since 1.0.2 (test builds wrote "Duet pairing" with another signature, and reading it made the released app ask for the login password); the repo is LaCreArthur/ensemble since 2026-10-13 (GitHub redirects the old name, so v1.0.1 copies still find updates; never create a new repo named duet). Router channel fix: the Livebox is not ours.
 - Two-route send, one-microphone tune, one Volume slider; the AirPlay link and web remote are deleted.
 - On-demand capture with the device as system output: it loses the start of every sound after a quiet spell.
 
