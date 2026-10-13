@@ -52,8 +52,8 @@ with ChaCha20-Poly1305 under a key the two Macs agree when you pair, with the cl
 Wi-Fi was the hard part. While the direct Mac-to-Mac link (AWDL) is active, the radio visits another
 channel every 512 TU, so the router path stalls about 90 ms twice a second; when Universal Control
 rebuilds its link, both paths stall up to 150 ms. We tried a 0.1 s budget: cut-outs. What we kept: every
-packet goes on both paths at once and the first copy wins, inside a 0.15 s budget, which held in daily use. The budget stays even while the other Mac sleeps, so the delay never jumps when
-it wakes.
+packet goes on both paths at once and the first copy wins, inside a 0.15 s budget, which held in daily use.
+The budget stays even while the other Mac sleeps, so the delay never jumps when it wakes.
 
 ## 4. Lining up the two Macs: one microphone
 
