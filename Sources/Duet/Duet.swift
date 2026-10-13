@@ -93,9 +93,10 @@ final class Duet {
     }
 
     struct Guide: Equatable {
-        /// `denied`: not allowed on the local network; `playing`: sound plays on this Mac's outputs; `device`:
-        /// the app's sound device is installed (video waits for the sound).
-        var denied = false, paired = false, playing = false, device = true
+        /// `denied`: not allowed on the local network; `sharing`: on, and allowed to record this Mac's sound;
+        /// `device`: the app's sound device is installed (video waits for the sound); `looking`: the user asked
+        /// to find the other Mac.
+        var denied = false, paired = false, sharing = false, device = true, looking = false
     }
 
     private enum Input: Equatable {
@@ -184,7 +185,7 @@ final class Duet {
             update()
         }
         link.onMessage = { [weak self] in self?.received($0) }
-        link.start()
+        if link.pairing != nil || store.bool(forKey: "findOtherMac") { link.start() }
         log.notice("started; open at login: \(SMAppService.mainApp.status == .enabled, privacy: .public)")
         observers = DeviceEvents.observe { [weak self] in MainActor.assumeIsolated { self?.update() } }
         // Waking up, or the user opening the menu, is a reason to look for the other Mac again.
@@ -212,6 +213,13 @@ final class Duet {
     func control(_ command: MediaCommand) { link.send(["t": "media", "cmd": command.rawValue]) }
 
     func pair(with peer: Link.Peer) { link.pair(with: peer) }
+
+    /// Starts looking for the other Mac; macOS then asks for local network access the first time.
+    func findOtherMac() {
+        store.set(true, forKey: "findOtherMac")
+        link.start()
+        update()
+    }
 
     /// Installs the app's sound device. Core Audio then restarts, and the engine with it.
     func installDevice() {
@@ -309,7 +317,8 @@ final class Duet {
             status = isTuning ? "Tuning: listening to each output…" : "Playing on " + names
         }
         otherMacStatus = otherMacText(peer: peer, session: session)
-        guide = Guide(denied: link.denied, paired: link.pairing != nil, playing: isPlaying, device: !EnsembleDevice.needsInstall)
+        guide = Guide(denied: link.denied, paired: link.pairing != nil, sharing: isOn && engine != nil,
+                      device: !EnsembleDevice.needsInstall, looking: link.started)
         shareVolume()
         applyVolumes()
         updateNowPlaying()
@@ -319,6 +328,7 @@ final class Duet {
     private func otherMacText(peer: PeerState?, session: Link.Session?) -> String {
         if link.denied { return "macOS does not let Ensemble look for your other Mac: allow it in Local Network settings." }
         if let note = link.note { return note }
+        if !link.started { return "" }
         guard let pairing = link.pairing else {
             return link.nearby.isEmpty ? "Open Ensemble on your other Mac to pair it." : ""
         }

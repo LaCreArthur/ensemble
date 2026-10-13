@@ -28,6 +28,7 @@ struct DuetApp: App {
 struct WelcomeView: View {
     @Bindable var duet: Duet
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let guide = duet.guide
@@ -44,16 +45,28 @@ struct WelcomeView: View {
                 Text("Ensemble adds a sound device to this Mac, so video players hold the picture back to match the sound. macOS asks for your password, and the sound stops for a second.")
                 Button("Install Sound Device…") { duet.installDevice() }
             }
-            step(2, done: guide.playing, "Play on all your speakers") {
-                Text("Turn on sharing, then tick your speakers in Ensemble's menu: this Mac's own, Bluetooth speakers, displays. When macOS asks, allow Ensemble to record this Mac's sound: this is how it plays your apps on every speaker.")
-                Toggle("Share this Mac's sound", isOn: $duet.isOn).toggleStyle(.switch)
+            step(2, done: guide.sharing, keepDetail: true, "Play on all your speakers") {
+                if !guide.sharing {
+                    Text("Turn on sharing. When macOS asks, allow Ensemble to record this Mac's sound: this is how it plays your apps on every speaker.")
+                    Toggle("Share this Mac's sound", isOn: $duet.isOn).toggleStyle(.switch)
+                } else {
+                    Text("Tick the speakers to play on. You can change them later in the menu bar.")
+                    ForEach(duet.outputs) { output in
+                        Toggle(output.name, isOn: Binding(
+                            get: { duet.chosenOutputs.contains(output.uid) },
+                            set: { duet.chosenOutputs.formSymmetricDifference([output.uid]); _ = $0 }))
+                    }
+                }
             }
             step(3, done: guide.paired, "Add your other Mac (optional)") {
                 if guide.denied {
                     Text("macOS does not let Ensemble look for your other Mac. Allow it in Local Network settings.")
                     Button("Open Local Network Settings") { Duet.openLocalNetworkSettings() }
+                } else if !guide.looking {
+                    Text("Install Ensemble on your other Mac too, and click Find on both Macs. When macOS asks, allow Ensemble to find devices on your local network: this is how your Macs find each other.")
+                    Button("Find My Other Mac") { duet.findOtherMac() }
                 } else if duet.link.pairable.isEmpty {
-                    Text("Install Ensemble there too and open it. When macOS asks, allow Ensemble to find devices on your local network: this is how your Macs find each other.")
+                    Text("Looking for your other Mac. Open Ensemble there and click Find My Other Mac.")
                 } else {
                     ForEach(duet.link.pairable, id: \.id) { peer in
                         Button("Pair with \(peer.name)…") { duet.pair(with: peer) }
@@ -75,17 +88,20 @@ struct WelcomeView: View {
         .padding(24)
         .frame(width: 440)
         .onAppear { NSApp.activate() }
+        // macOS's own prompts (password, recording, local network) take the focus: come back after each step.
+        .onChange(of: guide) { NSApp.activate(); openWindow(id: "welcome") }
         .onDisappear { UserDefaults.standard.set(true, forKey: "welcomed") }
     }
 
-    private func step(_ number: Int, done: Bool, _ title: String, @ViewBuilder detail: () -> some View) -> some View {
+    private func step(_ number: Int, done: Bool, keepDetail: Bool = false, _ title: String,
+                      @ViewBuilder detail: () -> some View) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: done ? "checkmark.circle.fill" : "\(number).circle")
                 .font(.title2)
                 .foregroundStyle(done ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
             VStack(alignment: .leading, spacing: 8) {
                 Text(title).font(.headline)
-                if !done {
+                if !done || keepDetail {
                     detail().font(.callout).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -142,6 +158,8 @@ struct DuetMenu: View {
             }
             if duet.guide.denied {
                 Button("Open Local Network Settings") { Duet.openLocalNetworkSettings() }
+            } else if !duet.guide.looking {
+                Button("Find My Other Mac") { duet.findOtherMac() }
             }
 
             Divider()

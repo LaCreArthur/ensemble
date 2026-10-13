@@ -89,7 +89,13 @@ public final class Link {
         self.pairing = pairing
     }
 
+    /// False until the user asks to find the other Mac (or a pairing exists): looking is what makes macOS
+    /// ask for local network access, so the setup guide explains it first.
+    public private(set) var started = false
+
     public func start() {
+        guard !started else { return }
+        started = true
         discover()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.reconcile() }
@@ -98,7 +104,7 @@ public final class Link {
 
     /// Looks for the other Mac again if this Mac stopped looking: on wake, or when the user opens the menu.
     public func lookAgain() {
-        guard session == nil, -lookingSince.timeIntervalSinceNow >= Self.directFor else { return }
+        guard started, session == nil, -lookingSince.timeIntervalSinceNow >= Self.directFor else { return }
         lookingSince = Date()
         updateDirect()
     }
