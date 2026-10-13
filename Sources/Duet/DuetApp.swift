@@ -18,55 +18,53 @@ struct DuetApp: App {
         }
         .windowResizability(.contentSize)
         .restorationBehavior(.disabled)
-        .defaultLaunchBehavior(duet.link.pairing == nil ? .presented : .suppressed)
+        .defaultLaunchBehavior(UserDefaults.standard.bool(forKey: "welcomed") ? .suppressed : .presented)
     }
 }
 
-/// The setup guide, shown at launch until this Mac is paired and from the menu: each step turns green
-/// once done, and says why macOS asks what it asks just before it does.
+/// The setup guide, shown at first launch and from the menu: each step turns green once done, and says
+/// why macOS asks what it asks just before it does. The other Mac is optional: one Mac can play on all
+/// its speakers.
 struct WelcomeView: View {
     @Bindable var duet: Duet
     @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
         let guide = duet.guide
-        // Steps 2 to 4 go in order; the sound device (1) can go in at any point.
-        let current = !guide.found && !guide.paired ? 2 : !guide.paired ? 3 : !guide.playing ? 4 : 5
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 14) {
                 Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 52, height: 52)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Welcome to Ensemble").font(.title2.bold())
-                    Text("Hear this Mac's sound on your other Mac too, in sync.").foregroundStyle(.secondary)
+                    Text("Play your Mac's sound on all your speakers, and on your other Mac, in sync.").foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            step(1, done: guide.device, active: true, "Keep video in sync") {
+            step(1, done: guide.device, "Keep video in sync") {
                 Text("Ensemble adds a sound device to this Mac, so video players hold the picture back to match the sound. macOS asks for your password, and the sound stops for a second.")
                 Button("Install Sound Device…") { duet.installDevice() }
             }
-            step(2, done: current > 2, active: current == 2, "Open Ensemble on your other Mac") {
+            step(2, done: guide.playing, "Play on all your speakers") {
+                Text("Turn on sharing, then tick your speakers in Ensemble's menu: this Mac's own, Bluetooth speakers, displays. When macOS asks, allow Ensemble to record this Mac's sound: this is how it plays your apps on every speaker.")
+                Toggle("Share this Mac's sound", isOn: $duet.isOn).toggleStyle(.switch)
+            }
+            step(3, done: guide.paired, "Add your other Mac (optional)") {
                 if guide.denied {
                     Text("macOS does not let Ensemble look for your other Mac. Allow it in Local Network settings.")
                     Button("Open Local Network Settings") { Duet.openLocalNetworkSettings() }
+                } else if duet.link.pairable.isEmpty {
+                    Text("Install Ensemble there too and open it. When macOS asks, allow Ensemble to find devices on your local network: this is how your Macs find each other.")
                 } else {
-                    Text("Install it there too. When macOS asks, allow Ensemble to find devices on your local network: this is how your two Macs find each other.")
+                    ForEach(duet.link.pairable, id: \.id) { peer in
+                        Button("Pair with \(peer.name)…") { duet.pair(with: peer) }
+                    }
+                    Text("Both Macs then show a code. Click Pair on each Mac if the codes are the same. The sound goes only to the Mac you pair.")
                 }
-            }
-            step(3, done: current > 3, active: current == 3, "Pair the two Macs") {
-                ForEach(duet.link.pairable, id: \.id) { peer in
-                    Button("Pair with \(peer.name)…") { duet.pair(with: peer) }
-                }
-                Text("Both Macs then show a code. Click Pair on each Mac if the codes are the same.")
                 if let note = duet.link.note { Text(note).foregroundStyle(.secondary) }
-            }
-            step(4, done: current > 4, active: current == 4, "Play a sound on both Macs") {
-                Text("On the Mac whose sound you want on both, turn on sharing and play something. When macOS asks, allow Ensemble to record this Mac's sound: it plays your apps on both Macs, and sends their sound only to the Mac you paired.")
-                Toggle("Share this Mac's sound", isOn: $duet.isOn).toggleStyle(.switch)
             }
             Divider()
             HStack(spacing: 6) {
-                Text(current > 4 && guide.device ? "Ensemble works. It lives in the menu bar:" : "Ensemble lives in the menu bar:")
+                Text("Ensemble lives in the menu bar:")
                 Image(systemName: "hifispeaker.2")
                 Spacer()
                 Link("Source code", destination: URL(string: "https://github.com/LaCreArthur/duet")!).foregroundStyle(.tint)
@@ -77,21 +75,21 @@ struct WelcomeView: View {
         .padding(24)
         .frame(width: 440)
         .onAppear { NSApp.activate() }
+        .onDisappear { UserDefaults.standard.set(true, forKey: "welcomed") }
     }
 
-    private func step(_ number: Int, done: Bool, active: Bool, _ title: String, @ViewBuilder detail: () -> some View) -> some View {
+    private func step(_ number: Int, done: Bool, _ title: String, @ViewBuilder detail: () -> some View) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: done ? "checkmark.circle.fill" : "\(number).circle")
                 .font(.title2)
                 .foregroundStyle(done ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
             VStack(alignment: .leading, spacing: 8) {
                 Text(title).font(.headline)
-                if active && !done {
+                if !done {
                     detail().font(.callout).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
-        .opacity(done || active ? 1 : 0.45)
     }
 }
 

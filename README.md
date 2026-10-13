@@ -1,34 +1,33 @@
 # Ensemble
 
-Ensemble plays your Mac's sound on your other Mac too, in sync. Put two Macs in a room, play music or a
-video on one, and hear it from both. It lives in the menu bar.
+Ensemble plays your Mac's sound on all your speakers at once, in sync: the Mac's own speakers,
+Bluetooth speakers, displays, and your other Mac. It lives in the menu bar.
 
-- Every app's sound, on both Macs at the same time.
+- Every app's sound, on every speaker you tick, heard together.
 - Video stays in sync: players hold the picture back by the same delay as the sound.
-- One volume for both Macs: the volume keys on either Mac set it.
-- Play, pause and skip tracks from the other Mac's menu or media keys.
-- Add more speakers on the sharing Mac (Bluetooth speakers, displays), and tune the sync with the
-  microphone.
+- Add your other Mac: it plays along, and its menu and media keys play, pause and skip.
+- One volume for everything: the volume keys on either Mac set it.
+- Tune the sync with the microphone, for speakers that report their delay wrong.
 
 ## Requirements
 
-Two Macs with macOS 26 or later (Apple silicon or Intel), on the same local network.
+macOS 26 or later (Apple silicon or Intel). For a second Mac: the same, on the same local network.
 
 ## Install
 
 1. Download `Ensemble-<version>.dmg` from [Releases](../../releases/latest) and drag Ensemble to
-   Applications, on both Macs.
-2. Open Ensemble. Its setup guide takes you through four steps, and says why before macOS asks anything:
+   Applications.
+2. Open Ensemble. Its setup guide takes you through three steps, and says why before macOS asks anything:
    - install Ensemble's sound device, which keeps video in sync (macOS asks for your password);
-   - open Ensemble on your other Mac and allow it on your local network, so the Macs find each other;
-   - pair the two Macs: both show a code, click **Pair** on each if the codes match;
-   - turn on **Share this Mac's sound** on the Mac you want to hear, and allow it to record that sound.
+   - turn on **Share this Mac's sound**, tick your speakers, and allow Ensemble to record the sound;
+   - optional: open Ensemble on your other Mac, allow it on your local network, and pair the two Macs
+     (both show a code: click **Pair** on each if the codes match).
 
-Ensemble lives in the menu bar and opens at login; both the guide and the login setting are in its menu.
+Ensemble lives in the menu bar and opens at login; the guide and the login setting are in its menu.
 
 ## Privacy
 
-The sound and the controls go only to the Mac you paired, on your local network, encrypted with a key
+The sound and the controls go only to the Mac you paired, if any, on your local network, encrypted with a key
 the two Macs made when you paired them (ChaCha20-Poly1305). The key stays in your login keychain. The
 microphone is used only while you tune the sync. Once a day Ensemble asks GitHub for its latest version;
 it sends nothing else anywhere.

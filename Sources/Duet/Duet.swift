@@ -93,9 +93,9 @@ final class Duet {
     }
 
     struct Guide: Equatable {
-        /// `denied`: not allowed on the local network; `playing`: sound plays on both Macs; `device`: the
-        /// app's sound device is installed (video waits for the sound).
-        var denied = false, found = false, paired = false, playing = false, device = true
+        /// `denied`: not allowed on the local network; `playing`: sound plays on this Mac's outputs; `device`:
+        /// the app's sound device is installed (video waits for the sound).
+        var denied = false, paired = false, playing = false, device = true
     }
 
     private enum Input: Equatable {
@@ -309,8 +309,7 @@ final class Duet {
             status = isTuning ? "Tuning: listening to each output…" : "Playing on " + names
         }
         otherMacStatus = otherMacText(peer: peer, session: session)
-        guide = Guide(denied: link.denied, found: !link.nearby.isEmpty || session != nil, paired: link.pairing != nil,
-                      playing: isReceiving || sender != nil, device: !EnsembleDevice.needsInstall)
+        guide = Guide(denied: link.denied, paired: link.pairing != nil, playing: isPlaying, device: !EnsembleDevice.needsInstall)
         shareVolume()
         applyVolumes()
         updateNowPlaying()
