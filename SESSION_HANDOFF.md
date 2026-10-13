@@ -1,19 +1,20 @@
-# Session handoff (2026-10-12, Ensemble, ex Duet)
+# Session handoff (2026-10-13, Ensemble, ex Duet)
 
 Playbook: ~/workspace/harness/memory/duet/ (test rig, network findings, audio findings, decisions, test safety).
 
 ## Now
-- Video sync is live on A (872110f): while A shares, the system output is Ensemble's own sound device (driver in Driver/, installed on A only), which reports capture 0.086 s + delay + speaker latency, so video waits. Arthur: lips "In sync" with the Tribit ticked (0.38 s), volume keys move every speaker.
-- Steady delay while paired (a85224c): room for the other Mac stays in the delay (its last lead stored), so the latency does not jump when B sleeps or wakes. A reports 0.25 s without the Tribit.
-- Always-running capture (dff6275): while sharing, the tap and the main output run all day with sleeping allowed (no coreaudiod sleep block, 0.3% CPU); other outputs and the stream start within about 15 ms of a sound and stop 5 min after. The engine restarts after a wake or a Core Audio restart.
-- B runs ab8ee3a (no driver, no steady delay, old on-demand capture). B was asleep at 09:20 (ssh timed out).
-- Not verified live: IO after sleep (restart on wake covers it), the Core Audio restart handler, browsers following a latency change mid-play, the first-use guide on an unpaired Mac, the Local Network denied state, Macs without Universal Control.
+- v1.0 released in the private repo (https://github.com/LaCreArthur/duet/releases/tag/v1.0): universal app, Developer ID signed, hardened runtime, DMG notarized and stapled by `scripts/release.sh`. README and MIT license written for going public.
+- The app carries its sound device and installs it with an admin prompt (driver version 2). Arthur installed the notarized download on A, installed the device from the menu: "works".
+- Setup guide (opens while unpaired, and from "Setup Guide…" in the menu): 1 sound device (independent), 2 other Mac + local network, 3 pair, 4 share + recording permission; footer: menu bar icon, source link. Step 1's not-installed look was never seen (A has the device).
+- Menu offers "Get Ensemble x.y…" when GitHub's latest release is newer (404 while the repo is private, so nothing shows).
+- Video sync, steady delay and always-running capture as before (872110f, a85224c, dff6275). B runs ab8ee3a, no driver.
+- Not verified live: IO after sleep, browsers following a latency change mid-play, the guide on an unpaired Mac, Local Network denied, Macs without Universal Control.
 
 ## Next
-1. B: install the new app and the driver (Arthur types the sudo install on B), then check B shares with video sync and A receives in sync.
-2. Arthur runs `sudo killall coreaudiod` once on A while a sound plays: the sound must come back by itself (Core Audio restart handler).
-3. When Arthur has the paid Apple developer account: Developer ID signing, hardened runtime, notarize and staple, an in-app driver installer with an admin prompt, a DMG or zip, a download page, an update path.
-4. Release test on another pair of Macs: fresh unpaired install, deny Local Network once, stream health without Universal Control, re-measure the capture path (`duet-lab device-path --device Ensemble`).
+1. Arthur's go to make the repo public (`gh repo edit LaCreArthur/duet --visibility public --accept-visibility-change-consequences`). History holds no secret (checked: only a LAN address default and a deleted key's name).
+2. B: install the v1.0 DMG (Arthur downloads it from the release), click Install Sound Device in the menu, check B shares in sync.
+3. Release test on another pair of Macs: fresh unpaired install (guide steps 1 to 4), deny Local Network once, stream health without Universal Control, re-measure the capture path (`duet-lab device-path --device Ensemble`).
+4. Next release: bump CFBundleShortVersionString (and the driver's CFBundleVersion if the driver changed), `scripts/release.sh`, `gh release create v<version> build/Ensemble-<version>.dmg`.
 
 ## Do not redo
 - One aggregate for several outputs: it delays the main output by an amount no property shows.
@@ -25,3 +26,4 @@ Default effort for the next task: medium.
 
 ## Open questions
 - Which second pair of Macs (ideally without Universal Control) can host the release test?
+- Public or not, and when (Arthur).
