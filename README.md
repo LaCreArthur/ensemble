@@ -22,8 +22,8 @@
 
 - **Video stays lip-synced.** Bluetooth and a second Mac play the sound late. Ensemble's own sound
   device tells video players that delay, so they hold the picture back to match.
-- **Your other Mac plays along**, 0.15 s behind, over your local network, encrypted. Its media keys
-  play, pause and skip.
+- **Your other Mac plays along**, at the same moment as your other speakers, over your local network,
+  encrypted. Its media keys play, pause and skip.
 - **One volume.** The volume keys on either Mac move every speaker.
 - **Every app's sound**, on every speaker you tick, heard together. Tune the sync with the microphone
   for speakers that report their delay wrong.
