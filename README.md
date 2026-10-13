@@ -20,14 +20,11 @@
 
 ## Why Ensemble
 
-- **Video stays lip-synced.** Bluetooth and a second Mac play the sound late. Ensemble's own sound
-  device tells video players that delay, so they hold the picture back to match.
-- **Your other Mac plays along**, at the same moment as your other speakers, over your local network,
-  encrypted. Its media keys play, pause and skip.
-- **One volume.** The volume keys on either Mac move every speaker.
-- **Every app's sound**, on every speaker you tick, heard together. Tune the sync with the microphone
-  for speakers that report their delay wrong.
-- **Free and open source** (MIT), notarized by Apple.
+- **Video stays lip-synced**, even with Bluetooth speakers.
+- **Your other Mac plays along**, at the same moment, with its media keys.
+- **One volume**: the keys on either Mac move every speaker.
+- **0.16 s** from app to every speaker (AirPlay: about 2 s). Both Macs within 2 ms. [How](docs/DESIGN.md)
+- **Free, open source**, notarized.
 
 ## How it compares
 
@@ -42,66 +39,31 @@
 | AirPlay, Sonos, phones | ❌ | ? | ❌ | ❌ | ✅ |
 | Per-app volume and EQ | ❌ | ❌ | ✅ | ✅ | ? |
 
-? = not measured yet. Pick something else if you need AirPlay or Sonos speakers (Airfoil), or volume
-and EQ per app (FineTune, Tutti).
-
-## Requirements
-
-macOS 26 or later (Apple silicon or Intel). For a second Mac: the same, on the same local network.
+? = not measured yet. Need AirPlay or Sonos: Airfoil. Volume and EQ per app: FineTune, Tutti.
 
 ## Install
 
-1. Download [Ensemble.dmg](../../releases/latest/download/Ensemble.dmg) (all versions: [Releases](../../releases))
-   and drag Ensemble to Applications.
-2. Open Ensemble. Its setup guide takes you through three steps, and says why before macOS asks anything:
-   - install Ensemble's sound device, which keeps video in sync (macOS asks for your password);
-   - turn on **Share this Mac's sound**, tick your speakers, and allow Ensemble to record the sound;
-   - optional: open Ensemble on your other Mac, allow it on your local network, and pair the two Macs
-     (both show a code: click **Pair** on each if the codes match).
-
-Ensemble lives in the menu bar and opens at login; the guide and the login setting are in its menu.
+1. Download [Ensemble.dmg](../../releases/latest/download/Ensemble.dmg) and drag it to Applications. Needs macOS 26.
+2. Open it: a short guide sets it up. For a second Mac on the same network, install it there too and pair.
 
 ## Privacy
 
-The sound and the controls go only to the Mac you paired, if any, on your local network, encrypted with a key
-the two Macs made when you paired them (ChaCha20-Poly1305). The key stays in your login keychain. The
-microphone is used only while you tune the sync. Once a day Ensemble asks GitHub for its latest version;
-it sends nothing else anywhere.
+Sound goes only to the Mac you paired, on your network, encrypted. The microphone is used only to
+tune. Once a day the app checks GitHub for a new version. Nothing else leaves your Mac.
 
 ## Uninstall
 
-Quit Ensemble and delete it from Applications. To remove its sound device:
+Delete Ensemble from Applications, then remove its sound device:
 
 ```sh
 sudo rm -rf /Library/Audio/Plug-Ins/HAL/EnsembleDevice.driver && sudo killall coreaudiod
 ```
 
-The pairing is a Keychain Access item named after your other Mac (where: "Ensemble pairing").
+## Build and contribute
 
-## How it works
-
-The sharing Mac captures every app's sound with a Core Audio process tap and plays it on its speakers a
-fixed delay later, about a quarter of a second. The same frames go to the other Mac over UDP, with clocks
-kept in step, so both Macs play each frame at the same moment. Ensemble's sound device (`Driver/`, an
-Audio Server plug-in) becomes the Mac's sound output while it shares: it reports that delay as its
-latency, so video players hold the picture back to match.
-
-## Build
-
-Needs Xcode 26.
-
-```sh
-DUET_IDENTITY="Apple Development: Your Name (TEAMID)" scripts/build-app.sh   # builds and installs in /Applications
-scripts/release.sh   # Developer ID signed, notarized DMG in build/
-```
-
-`duet-lab` (`swift run duet-lab`) holds the measurement tools used to tune the sync.
-
-## Contributing
-
-The most useful help is a [setup report](../../issues/new?template=setup_report.yml) from Macs and speakers
-we have not tried. To change the code, see [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[help wanted](../../labels/help%20wanted) ideas.
+`swift build` with Xcode 26. [How it works](docs/DESIGN.md), [CONTRIBUTING.md](CONTRIBUTING.md), and
+the most useful help of all: a [setup report](../../issues/new?template=setup_report.yml) from your Macs
+and speakers.
 
 ## License
 
