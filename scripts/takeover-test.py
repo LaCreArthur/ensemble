@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Two-Mac test of the takeover (the newest sound wins and pauses the other Mac), with stand-in music
 apps that cannot be heard (duet-lab nowplaying: 30 Hz at -60 dBFS; a pause leaves the output open with
-zeros, as browsers do). Needs Ensemble running and connected on both Macs, `ssh macb`, and duet-lab
+zeros, as browsers do), and a non-media tone played with afplay. Needs Ensemble running and connected on both Macs, `ssh macb`, and duet-lab
 at /tmp/duet-lab on Mac B. Checks each Mac's log and the stand-ins' received commands; exits 1 on any failure."""
 import subprocess, time, sys, datetime
 LAB = subprocess.run(['swift', 'build', '--product', 'duet-lab', '--show-bin-path'], capture_output=True, text=True).stdout.strip() + '/duet-lab'
@@ -26,9 +26,11 @@ def standin(on_b, name, *args):
 def standin_log(on_b, name):
     return subprocess.run((B if on_b else []) + ['cat', f'/tmp/{name}.log'], capture_output=True, text=True).stdout
 
+# Refuse while someone's music plays: a takeover pauses the other Mac's now-playing app.
+NOW = "ObjC.import('Foundation'); $.NSBundle.bundleWithPath('/System/Library/PrivateFrameworks/MediaRemote.framework/').load; const R = $.NSClassFromString('MRNowPlayingRequest'); const c = R.localNowPlayingPlayerPath.client; (R.localIsPlaying ? 'playing ' : 'paused ') + (c.isNil() ? '' : c.bundleIdentifier.js)"
 for mac, on_b in [('A', False), ('B', True)]:
-    busy = [l for l in subprocess.run((B if on_b else []) + [('/tmp/duet-lab' if on_b else LAB), 'audio-processes'], capture_output=True, text=True).stdout.splitlines() if 'com.lacrearthur.duet' not in l and ' output 1' in l]
-    if busy and '--busy-ok' not in sys.argv: sys.exit(f'{mac} plays sound now ({busy}): not testing over it (--busy-ok once its owner agrees)')
+    state = subprocess.run((B if on_b else []) + ['osascript', '-l', 'JavaScript', '-e', f'"{NOW}"' if on_b else NOW], capture_output=True, text=True).stdout.strip()
+    if state.startswith('playing') and 'com.lacrearthur.duet' not in state: sys.exit(f'{mac}: {state}: not testing over it')
 # S is the Mac that shares at the start, O the other one (True = Mac B).
 S = sharing(True)
 O = not S
@@ -57,10 +59,13 @@ t3 = now()
 time.sleep(10)
 check('O does not take sharing back', log(O, t3, 'a sound started here') == [] and sharing(S))
 a.wait(); b.wait()
-print('4. O 1 s alert on O while S shares', flush=True)
+print('4. A sound that is not media (an alert, a game) on O while S shares', flush=True)
 t4 = now()
-standin(O, 'standin-alert', '--seconds', '1').wait()
-time.sleep(4)
-check('a 1 s sound does not take over', log(O, t4, 'a sound started here') == [] and sharing(S))
+tone = '/tmp/takeover-tone.wav'   # 3 s of 30 Hz at -60 dBFS: inaudible
+subprocess.run(['python3', '-c', f"import wave,struct,math; w=wave.open('{tone}','wb'); w.setparams((1,2,48000,0,'NONE','')); w.writeframes(b''.join(struct.pack('<h', int(32.767*math.sin(2*math.pi*30*i/48000))) for i in range(144000)))"])
+if O: subprocess.run(['scp', '-q', tone, f'macb:{tone}'])
+subprocess.run((B if O else []) + ['afplay', tone])
+time.sleep(2)
+check('a sound that is not media does not take over', log(O, t4, 'a sound started here') == [] and sharing(S))
 print('stand-in O:\n' + standin_log(O, 'standin-o') + 'stand-in S:\n' + standin_log(S, 'standin-s'))
 sys.exit(1 if fails else 0)

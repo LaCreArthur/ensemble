@@ -12,8 +12,8 @@ import os
 /// Rules: Duet runs on both Macs. The Mac where Duet is on shares its sound: every app's sound plays
 /// on its ticked outputs and on the other Mac, all heard together; the other Mac plays along unless
 /// its output is headphones. Turning Duet on on one Mac turns it off on the other (the later switch
-/// wins). A sound that starts on the other Mac after silence and lasts 2 s does the same there, and
-/// pauses this Mac's music: the newest sound wins, as AirPods move to the device that starts playing.
+/// wins). Music or a video that starts on the other Mac does the same there, and pauses
+/// this Mac's music: the newest one wins, as AirPods move to the device that starts playing.
 /// While one Mac plays the other's sound, both Macs have one volume: the volume keys, Control
 /// Center or the menu on either Mac set it, mute included; each output also has its own share of it,
 /// set on its Mac. The other Mac's menu and media keys control the music: play/pause, tracks. A
@@ -116,8 +116,10 @@ final class Duet {
     private let monitor = PlaybackMonitor(excluding: [getpid()])
     /// Keeps the capture running for a while after the last app stops, so pauses do not restart it.
     private var hold: Timer?
-    /// While the other Mac shares, listens for a sound that starts here, to share it instead.
-    private var watch: LevelWatch?
+    /// While the other Mac shares and an app here has its output open, listens for that app's sound, to share it instead.
+    private var watch: NowPlayingWatch?
+    /// Media commands sent to this Mac's music app and not yet received by it.
+    private var delivering = 0
     private var engine: Engine?
     private var sender: StreamSender?
     private var receiver: StreamReceiver?
@@ -199,8 +201,6 @@ final class Duet {
         // Sleep stops every device and a Core Audio restart deletes the capture: after either, the
         // engine starts again from scratch (it runs all day while this Mac shares).
         let rebuild: @Sendable () -> Void = { [weak self] in MainActor.assumeIsolated {
-            self?.watch?.stop()
-            self?.watch = nil
             self?.restart(nil, playing: false)
             self?.update()
         } }
@@ -306,7 +306,7 @@ final class Duet {
             activity = isPlaying ? ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical], reason: "Playing sound") : nil
         }
         updateSender(session: session, peerPlays: peer?.canPlay == true)
-        updateWatch(wanted: !isOn && peer?.on == true && headphones == nil, main: main)
+        updateWatch(wanted: !isOn && peer?.on == true && headphones == nil)
 
         let peerName = session?.peer.name ?? link.pairing?.peer.name ?? "the other Mac"
         let names = ListFormatter.localizedString(byJoining: outputs.filter { chosenOutputs.contains($0.uid) }.map(\.name)
@@ -441,27 +441,23 @@ final class Duet {
         update()
     }
 
-    private func updateWatch(wanted: Bool, main: OutputDevice?) {
+    private func updateWatch(wanted: Bool) {
         if !wanted {
             watch?.stop()
             watch = nil
-        } else if watch == nil, let main {
-            let watch = LevelWatch(excluding: [getpid()], device: main) { [weak self] in
-                MainActor.assumeIsolated { self?.takeOver() }
-            }
+        } else if watch == nil {
+            let watch = NowPlayingWatch { [weak self] in MainActor.assumeIsolated { self?.takeOver() } }
             do {
-                try watch.start()
+                try watch.run()
                 self.watch = watch
             } catch {
-                log.error("cannot listen: \(String(describing: error), privacy: .public)")
+                log.error("cannot watch Now Playing: \(String(describing: error), privacy: .public)")
             }
         }
-        // Playing the other Mac's sound keeps this Mac awake; listening alone must not.
-        if watch != nil { LevelWatch.allowSleep(receiver == nil) }
     }
 
-    /// A sound started here while the other Mac shares: this Mac shares instead, and the other Mac's
-    /// music pauses (sent before the switch, while the other Mac still shares and obeys media commands).
+    /// Music or a video started here while the other Mac shares: this Mac shares instead, and the other
+    /// Mac's music pauses (sent before the switch, while the other Mac still shares and obeys media commands).
     private func takeOver() {
         guard !isOn, let peer, peer.on, headphones == nil else { return }
         if peer.playing { control(.pause) }
@@ -492,7 +488,9 @@ final class Duet {
             if peerLead != state.lead { peerLead = state.lead }
             update()
         case "media":
-            if isOn, let command = (message["cmd"] as? String).flatMap(MediaCommand.init(rawValue:)) { command.perform() }
+            guard isOn, let command = (message["cmd"] as? String).flatMap(MediaCommand.init(rawValue:)) else { break }
+            delivering += 1
+            command.perform { [weak self] in MainActor.assumeIsolated { self?.delivering -= 1; self?.update() } }
         case "volume":
             guard isOn, let value = message["value"] as? Double else { break }
             mainVolume = max(0, min(1, value))
@@ -517,10 +515,12 @@ final class Duet {
     }
 
     /// While this Mac plays the other Mac's sound, Duet is its now-playing app: the media keys and
-    /// Control Center control the music on the other Mac.
+    /// Control Center control the music on the other Mac. Not while a command to this Mac's own music
+    /// is on its way: the system gives it to the now-playing app of the moment, and the pause that comes
+    /// with the other Mac taking sharing would reach Duet and pause the other Mac's music instead.
     private func updateNowPlaying() {
         let center = MPNowPlayingInfoCenter.default()
-        guard isReceiving, let name = link.session?.peer.name else {
+        guard isReceiving, delivering == 0, let name = link.session?.peer.name else {
             guard !remoteCommands.isEmpty else { return }
             for (command, target) in remoteCommands { command.removeTarget(target) }
             remoteCommands = []

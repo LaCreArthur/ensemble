@@ -550,8 +550,10 @@ case "monitor":
 
 case "media":
     // Sends one media command (play, pause, playPause, next, previous) to the now-playing app.
-    print(MediaCommand(rawValue: args[1])!.perform() ? "sent" : "not sent")
-    Thread.sleep(forTimeInterval: 0.8)   // the system checks the sender after the call returns
+    let t0 = Date()
+    MediaCommand(rawValue: args[1])!.perform { print(String(format: "delivered after %.3f s", Date().timeIntervalSince(t0))); exit(0) }
+    RunLoop.main.run(until: Date() + 10)
+    print("no delivery in 10 s")
 
 case "nowplaying":
     // A stand-in music app: becomes the now-playing app and logs the commands it receives.

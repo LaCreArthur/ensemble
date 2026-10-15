@@ -2,8 +2,8 @@ import Foundation
 
 /// Play/pause and track commands for whatever app is playing on this Mac (Spotify, Music, a browser),
 /// sent through the system's now-playing service, like the keyboard's media keys.
-/// The system checks the sender's code signature after the call returns, so the sending process must
-/// stay alive for a moment after sending (an app does; a one-shot tool must wait).
+/// The system delivers it later, to whichever app is the now-playing one at that moment (a few hundred
+/// ms, measured), then calls back; the sending process must stay alive until then.
 public enum MediaCommand: String, CaseIterable, Sendable {
     case play, pause, playPause, next, previous
 
@@ -17,13 +17,16 @@ public enum MediaCommand: String, CaseIterable, Sendable {
         }
     }
 
-    private typealias Send = @convention(c) (Int32, CFDictionary?) -> Bool
+    private typealias Send = @convention(c) (Int32, CFDictionary?, DispatchQueue, @escaping @convention(block) (CFArray?) -> Void) -> Void
     private static let send: Send? = {
         guard let bundle = CFBundleCreate(kCFAllocatorDefault, NSURL(fileURLWithPath: "/System/Library/PrivateFrameworks/MediaRemote.framework")),
-              let pointer = CFBundleGetFunctionPointerForName(bundle, "MRMediaRemoteSendCommand" as CFString) else { return nil }
+              let pointer = CFBundleGetFunctionPointerForName(bundle, "MRMediaRemoteSendCommandWithReply" as CFString) else { return nil }
         return unsafeBitCast(pointer, to: Send.self)
     }()
 
-    @discardableResult
-    public func perform() -> Bool { Self.send?(code, nil) ?? false }
+    /// Calls `delivered` on the main queue once the now-playing app has received the command.
+    public func perform(delivered: @escaping @Sendable () -> Void) {
+        guard let send = Self.send else { return DispatchQueue.main.async(execute: delivered) }
+        send(code, nil, .main) { _ in delivered() }
+    }
 }

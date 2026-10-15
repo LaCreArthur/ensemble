@@ -1,8 +1,7 @@
 # path<TAB>exact source text<TAB>the deliberate bug (\n for a newline). Run: scripts/mutants.py
-Sources/DuetCore/Audio/LevelWatch.swift	        if peak < Self.floor {	        if peak <= 0 {
-Sources/DuetCore/Audio/LevelWatch.swift	            if Double(quiet) >= silence * rate {	            if Double(quiet) >= 0 {
-Sources/DuetCore/Audio/LevelWatch.swift	        quiet = 0\n        guard armed	        guard armed
-Sources/DuetCore/Audio/LevelWatch.swift	        guard armed else { return false }	        guard true else { return false }
-Sources/DuetCore/Audio/LevelWatch.swift	        guard Double(loud) >= minimum * rate else	        guard Double(loud) > 0 else
-Sources/DuetCore/Audio/LevelWatch.swift	        armed = false\n        loud = 0\n        return true	        loud = 0\n        return true
-Sources/DuetCore/Audio/LevelWatch.swift	                armed = true\n                loud = 0	                armed = true
+Sources/DuetCore/Control/NowPlayingWatch.swift	        guard let last, now.playing, now.app != own else { return false }	        guard let last, now.playing else { return false }
+Sources/DuetCore/Control/NowPlayingWatch.swift	        guard let last, now.playing, now.app != own else { return false }	        let last = last ?? NowPlaying(playing: false, app: nil)\n        guard now.playing, now.app != own else { return false }
+Sources/DuetCore/Control/NowPlayingWatch.swift	        guard let last, now.playing, now.app != own else { return false }	        guard let last, now.app != own else { return false }
+Sources/DuetCore/Control/NowPlayingWatch.swift	        return !last.playing || last.app != now.app	        return !last.playing
+Sources/DuetCore/Control/NowPlayingWatch.swift	        return !last.playing || last.app != now.app	        return last.app != now.app
+Sources/DuetCore/Control/NowPlayingWatch.swift	        defer { last = now }	        defer { if last == nil { last = now } }
