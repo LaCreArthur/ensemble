@@ -41,13 +41,15 @@ struct WelcomeView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            step(1, done: guide.device, "Keep video in sync") {
-                Text("Ensemble adds a sound device to this Mac, so video players hold the picture back to match the sound. macOS asks for your password, and the sound stops for a second.")
+            step(1, done: guide.device, "Add Ensemble's sound device") {
+                Text("Your apps play to Ensemble's sound device while you share, and video players hold the picture back to match the sound. macOS asks for your password, and the sound stops for a second.")
                 Button("Install Sound Device…") { duet.installDevice() }
             }
             step(2, done: guide.sharing, keepDetail: true, "Play on all your speakers") {
-                if !guide.sharing {
-                    Text("Turn on sharing. When macOS asks, allow Ensemble to record this Mac's sound: this is how it plays your apps on every speaker.")
+                if !guide.device {
+                    Text("Add the sound device first.")
+                } else if !guide.sharing {
+                    Text("Turn on sharing. If macOS asks, allow Ensemble to use the microphone: macOS names every sound input so, and Ensemble reads your apps' sound from its own device.")
                     Toggle("Share this Mac's sound", isOn: $duet.isOn).toggleStyle(.switch)
                 } else {
                     Text("Tick the speakers to play on. You can change them later in the menu bar.")
@@ -88,7 +90,7 @@ struct WelcomeView: View {
         .padding(24)
         .frame(width: 440)
         .onAppear { NSApp.activate() }
-        // macOS's own prompts (password, recording, local network) take the focus: come back after each step.
+        // macOS's own prompts (password, microphone, local network) take the focus: come back after each step.
         .onChange(of: guide) { NSApp.activate(); openWindow(id: "welcome") }
         .onDisappear { UserDefaults.standard.set(true, forKey: "welcomed") }
     }
@@ -123,7 +125,7 @@ struct DuetMenu: View {
             }
             Text(duet.status).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if duet.isOn && !duet.guide.device {
-                Text("Video runs ahead of the sound until you install Ensemble's sound device.")
+                Text("Ensemble shares this Mac's sound through its own sound device.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Button("Install Sound Device…") { duet.installDevice() }
             }

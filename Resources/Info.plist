@@ -13,8 +13,7 @@
     <key>CFBundleVersion</key><string>3</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>LSUIElement</key><true/>
-    <key>NSAudioCaptureUsageDescription</key><string>Ensemble plays the sound of your apps on your other speakers and on your other Mac.</string>
-    <key>NSMicrophoneUsageDescription</key><string>When you tune the sync, Ensemble listens for a few seconds to hear when each speaker plays.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Ensemble reads the sound your apps play to its own sound device, and when you tune the sync, it listens for a few seconds to hear when each speaker plays.</string>
     <key>NSLocalNetworkUsageDescription</key><string>Ensemble finds your other Mac running Ensemble, and exchanges the sound and the music controls with it.</string>
     <key>NSBonjourServices</key><array><string>_duet._tcp</string><string>_duet._udp</string></array>
 </dict>

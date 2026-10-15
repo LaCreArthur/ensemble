@@ -204,15 +204,3 @@ public func builtInMicrophone() -> AudioObjectID? {
             && (try? CA.scalar(id, kAudioDevicePropertyTransportType, as: UInt32.self)) == kAudioDeviceTransportTypeBuiltIn
     }
 }
-
-/// The CoreAudio process object for a PID (needed to include or exclude a process from a tap).
-func processObject(for pid: pid_t) throws -> AudioObjectID {
-    var addr = CA.address(kAudioHardwarePropertyTranslatePIDToProcessObject)
-    var p = pid
-    var object = AudioObjectID(kAudioObjectUnknown)
-    var size = UInt32(MemoryLayout<AudioObjectID>.size)
-    try check(AudioObjectGetPropertyData(CA.system, &addr, UInt32(MemoryLayout<pid_t>.size), &p, &size, &object),
-              "translate pid \(pid)")
-    if object == kAudioObjectUnknown { throw CoreAudioError(status: -1, what: "no audio process object for pid \(pid)") }
-    return object
-}

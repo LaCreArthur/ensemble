@@ -2,12 +2,13 @@ import CoreAudio
 import Foundation
 
 /// Ensemble's sound device (Driver/EnsembleDevice.c), when installed. While this Mac shares its sound,
-/// apps play to it and Ensemble captures them as from any output; the device reports the delay as its
-/// latency, so video players hold the picture back to match. It exists only while Ensemble asks for it,
-/// and goes when Ensemble exits. Without the driver, every call here does nothing. The app carries the
-/// driver and installs it on request.
+/// apps play to it and Ensemble reads their sound from its hidden capture twin; the device reports the
+/// delay as its latency, so video players hold the picture back to match. Both exist only while Ensemble
+/// asks for them, and go when Ensemble exits. Without the driver, every call here does nothing and this
+/// Mac cannot share. The app carries the driver and installs it on request.
 public enum EnsembleDevice {
     static let uid = "com.lacrearthur.duet.device"
+    static let captureUID = "com.lacrearthur.duet.capture"
     /// On the plug-in: the device's latency in frames, -1 for no device (a property list number).
     private static let attach: AudioObjectPropertySelector = 0x656E_6C64   // 'enld'
     private static let sampleRate = 48_000.0

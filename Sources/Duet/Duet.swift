@@ -95,9 +95,9 @@ final class Duet {
     }
 
     struct Guide: Equatable {
-        /// `denied`: not allowed on the local network; `sharing`: on, and allowed to record this Mac's sound;
-        /// `device`: the app's sound device is installed (video waits for the sound); `looking`: the user asked
-        /// to find the other Mac.
+        /// `denied`: not allowed on the local network; `sharing`: on, and capturing this Mac's sound;
+        /// `device`: the app's sound device is installed (sharing needs it); `looking`: the user asked to find
+        /// the other Mac.
         var denied = false, paired = false, sharing = false, device = true, looking = false
     }
 
@@ -274,6 +274,7 @@ final class Duet {
         let system = OutputDevice.defaultOutput()
         let headphones = self.headphones
         let sharing = isOn && !devices.isEmpty
+        let needsInstall = EnsembleDevice.needsInstall
         if !sharing, EnsembleDevice.isSystemOutput, let main { try? OutputDevice.setDefaultOutput(main) }   // before the device goes
         EnsembleDevice.setLatency(sharing ? Engine.capturePath + delay + (main?.outputLatency ?? 0) + trim : nil)
         let device = EnsembleDevice.id
@@ -290,7 +291,7 @@ final class Duet {
         let wanted = monitor.isPlaying || hold != nil || isTuning
         var desired: Config?
         if !devices.isEmpty, headphones == nil {
-            if isOn {
+            if isOn, device != nil {
                 desired = Config(outputs: devices.map(\.uid), delay: delay, input: .capture)
             } else if !isOn, let peer, let session, peer.on, !peer.stream.isEmpty {
                 let input = Input.stream(name: peer.stream, session: ObjectIdentifier(session.crypto))
@@ -322,7 +323,7 @@ final class Duet {
         } else if names.isEmpty {
             status = "Playing nowhere: tick an output"
         } else if engine == nil {
-            status = "Cannot capture the sound"
+            status = needsInstall ? "Install the sound device to share" : "Cannot capture the sound"
         } else if !wanted {
             status = "Ready for sound on " + names
         } else {
@@ -330,7 +331,7 @@ final class Duet {
         }
         otherMacStatus = otherMacText(peer: peer, session: session)
         guide = Guide(denied: link.denied, paired: link.pairing != nil, sharing: isOn && engine != nil,
-                      device: !EnsembleDevice.needsInstall, looking: link.started)
+                      device: !needsInstall, looking: link.started)
         shareVolume()
         applyVolumes()
         updateNowPlaying()
@@ -379,7 +380,7 @@ final class Duet {
         let input: Engine.Input
         switch config.input {
         case .capture:
-            input = .captureAllExcept([getpid()])
+            input = .loopback
         case .stream(let name, _):
             guard let session = link.session else {
                 running = nil
@@ -404,7 +405,14 @@ final class Duet {
         }
         self.engine = engine
         log.notice("playing \(self.receiver == nil ? "this Mac's sound" : "the other Mac's sound", privacy: .public) on \(devices.count) outputs, delay \(config.delay, format: .fixed(precision: 3)) s")
-        if let receiver {
+        if receiver == nil {
+            healthTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self, weak engine] _ in
+                guard let engine else { return }
+                let peak = engine.capturePeak.value
+                engine.capturePeak.value = 0
+                MainActor.assumeIsolated { self?.log.notice("capture: loudest \(20 * log10(peak), format: .fixed(precision: 1)) dBFS") }
+            }
+        } else if let receiver {
             healthTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self, weak receiver] _ in
                 guard let receiver else { return }
                 let s = receiver.takeStats()

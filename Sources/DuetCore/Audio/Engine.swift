@@ -4,8 +4,8 @@ import Foundation
 import Synchronization
 
 /// Plays one stereo stream on one or more local output devices, all heard together. The stream is
-/// either the sound of this Mac's apps, captured (the apps themselves go silent) and played after a
-/// fixed delay that gives the other Mac time to receive it, or the sound the other Mac sends. The
+/// either the sound this Mac's apps play to Ensemble's sound device, played after a fixed delay that
+/// gives the other Mac time to receive it, or the sound the other Mac sends. The
 /// stream's frames go to `ring`, and `anchor` tells when each frame is heard here.
 ///
 /// Timeline: stream frame X is written to `ring` at index X and the main output plays it D frames
@@ -17,10 +17,8 @@ import Synchronization
 /// the main output by an amount the engine cannot see.
 public final class Engine: @unchecked Sendable {
     public enum Input: Sendable {
-        /// The sound of every process except the listed ones (the product: everything but Duet itself).
-        case captureAllExcept([pid_t])
-        /// The sound of the listed processes only (tests).
-        case captureOnly([pid_t])
+        /// What apps play to Ensemble's sound device, read back from its hidden capture twin.
+        case loopback
         /// The other Mac's stream.
         case network(StreamReceiver)
     }
@@ -67,10 +65,10 @@ public final class Engine: @unchecked Sendable {
     public private(set) var outputLatencyFrames: UInt32 = 0
     /// Extra correction (seconds) for a main output that reports its latency wrongly.
     public let latencyTrim = AtomicFloat(0)
+    /// Loudest captured sample (linear) since the app last set it to 0: shows whether the capture hears the apps.
+    public let capturePeak = AtomicFloat(0)
 
-    private let input: Input
     private let receiver: StreamReceiver?
-    private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
 
@@ -81,20 +79,18 @@ public final class Engine: @unchecked Sendable {
     private let scratch: UnsafeMutablePointer<Float>
     private static let maxFrames = 16_384
     /// Frames per cycle of the capture and the main output. Each frame of it delays the sound twice (in,
-    /// then out): capture path 85.1 ms at 512, 69.1 at 128, 66.4 at 64; at 32 the timing wandered (2026-10-15).
+    /// then out); at 32 frames the timing wandered and Core Audio reported overloads (2026-10-15).
     static let cycleFrames: UInt32 = 128
-    /// Seconds from an app handing its sound to its output to that sound entering the timeline, as
-    /// `duet-lab device-path` measures it: about 22.7 ms until the tap stamps it, then the aggregate's input
-    /// and output safety offsets (1003 + 964 frames on a MacBook Pro) and two cycles. Part of the latency
-    /// Ensemble's sound device reports.
-    public static let capturePath = 0.069
+    /// Seconds from an app handing its sound to Ensemble's device to that sound entering the timeline, as
+    /// `duet-lab device-path` measures it (8.5 ms on a MacBook Pro, the same with apps playing 128 or 512
+    /// frames per cycle; a process tap took 69 ms). Part of the latency Ensemble's sound device reports.
+    public static let capturePath = 0.0085
 
     private let pendingClick = Atomic<Int>(-1)
     private let click: [Float]
 
     public init(input: Input, outputs: [OutputDevice], delaySeconds: Double, sourceRate: Double = 0) {
         precondition(!outputs.isEmpty)
-        self.input = input
         if case .network(let receiver) = input { self.receiver = receiver } else { receiver = nil }
         self.outputs = outputs.map(Output.init)
         sampleRate = outputs[0].nominalSampleRate
@@ -114,21 +110,16 @@ public final class Engine: @unchecked Sendable {
         // A capture runs all the time while this Mac shares and must not keep it awake: the apps it
         // captures do, while they play. Playing the other Mac's stream is the only sound here, so it does.
         try? CA.setScalar(CA.system, kAudioHardwarePropertySleepingIsAllowed, UInt32(receiver == nil ? 1 : 0))
-        let tap = try makeTapDescription()
-        if let tap { try check(AudioHardwareCreateProcessTap(tap, &tapID), "create process tap") }
-
         let main = outputs[0].device
-        var description: [String: Any] = [
+        let description: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Duet",
             kAudioAggregateDeviceUIDKey: "duet.aggregate.\(UUID().uuidString)",
             kAudioAggregateDeviceMainSubDeviceKey: main.uid,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
-            kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: main.uid]],
+            kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: main.uid]]
+                + (receiver == nil ? [[kAudioSubDeviceUIDKey: EnsembleDevice.captureUID, kAudioSubDeviceDriftCompensationKey: 1]] : []),
         ]
-        if let tap {
-            description[kAudioAggregateDeviceTapListKey] = [[kAudioSubTapUIDKey: tap.uuid.uuidString, kAudioSubTapDriftCompensationKey: true]]
-        }
         do {
             try check(AudioHardwareCreateAggregateDevice(description as CFDictionary, &aggregateID), "create aggregate device")
             try? CA.setScalar(aggregateID, kAudioDevicePropertyBufferFrameSize, Self.cycleFrames)
@@ -185,10 +176,6 @@ public final class Engine: @unchecked Sendable {
             AudioHardwareDestroyAggregateDevice(aggregateID)
             aggregateID = AudioObjectID(kAudioObjectUnknown)
         }
-        if tapID != kAudioObjectUnknown {
-            AudioHardwareDestroyProcessTap(tapID)
-            tapID = AudioObjectID(kAudioObjectUnknown)
-        }
         try? CA.setScalar(CA.system, kAudioHardwarePropertySleepingIsAllowed, 1)
     }
 
@@ -210,22 +197,6 @@ public final class Engine: @unchecked Sendable {
     public func injectClick(atFrame frame: Int) { pendingClick.store(frame, ordering: .releasing) }
     public var clickLength: Int { click.count }
 
-    private func makeTapDescription() throws -> CATapDescription? {
-        let description: CATapDescription
-        switch input {
-        case .captureAllExcept(let pids):
-            description = CATapDescription(stereoGlobalTapButExcludeProcesses: try pids.map(processObject(for:)))
-        case .captureOnly(let pids):
-            description = CATapDescription(stereoMixdownOfProcesses: try pids.map(processObject(for:)))
-        case .network:
-            return nil
-        }
-        description.uuid = UUID()
-        description.name = "Duet"
-        description.isPrivate = true
-        description.muteBehavior = .mutedWhenTapped
-        return description
-    }
 
     // MARK: IO thread
 
@@ -247,7 +218,7 @@ public final class Engine: @unchecked Sendable {
         if let receiver {
             receiver.render(frames: frames, heardAt: heardAt, into: scratch)
         } else {
-            readTap(UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input)), frames: frames)
+            readInput(UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input)), frames: frames)
         }
         applyMainGain(frames: frames)
         addPendingClick(start: start, frames: frames)
@@ -272,20 +243,15 @@ public final class Engine: @unchecked Sendable {
         if let heardAt { anchor.store(Anchor(frame: start, time: heardAt)) }
     }
 
-    /// Copies the tap's stereo input (interleaved or planar) into `scratch`.
-    private func readTap(_ inputs: UnsafeMutableAudioBufferListPointer, frames: Int) {
-        var n = 0
-        if inputs.count > 0, let data0 = inputs[0].mData {
-            let ch0 = Int(inputs[0].mNumberChannels)
-            let src0 = data0.assumingMemoryBound(to: Float.self)
-            n = min(frames, Int(inputs[0].mDataByteSize) / (MemoryLayout<Float>.size * max(1, ch0)))
-            let src1: UnsafeMutablePointer<Float>? = ch0 < 2 && inputs.count >= 2 ? inputs[1].mData?.assumingMemoryBound(to: Float.self) : nil
-            for i in 0..<n {
-                scratch[2 * i] = ch0 >= 2 ? src0[i * ch0] : src0[i]
-                scratch[2 * i + 1] = ch0 >= 2 ? src0[i * ch0 + 1] : (src1?[i] ?? src0[i])
-            }
-        }
+    /// Copies the capture twin's input (interleaved stereo, the device's only format) into `scratch`,
+    /// and keeps its loudest sample.
+    private func readInput(_ inputs: UnsafeMutableAudioBufferListPointer, frames: Int) {
+        let n = inputs.first.map { min(frames, Int($0.mDataByteSize) / (2 * MemoryLayout<Float>.size)) } ?? 0
+        if n > 0, let data = inputs[0].mData { scratch.update(from: data.assumingMemoryBound(to: Float.self), count: 2 * n) }
         if n < frames { (scratch + 2 * n).update(repeating: 0, count: 2 * (frames - n)) }
+        var peak = capturePeak.value
+        for i in 0..<2 * n { peak = max(peak, abs(scratch[i])) }
+        capturePeak.value = peak
     }
 
     /// Multiplies `scratch` by the main gain.

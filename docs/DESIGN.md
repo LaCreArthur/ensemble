@@ -17,15 +17,20 @@ LG display, with the tools in `Sources/DuetLab` (`swift run duet-lab`).
 
 For comparison, AirPlay buffers about 2 seconds, and Snapcast's default end-to-end buffer is 1 second.
 
-## 1. Capture every app: a process tap, not a loopback driver
+## 1. Capture every app: our own sound device, not a process tap
 
-Ensemble captures the sound with a Core Audio process tap on every app. A loopback driver (the
-BlackHole approach) would save an estimated 45 ms, but then nobody could share without installing a
-driver first. The tap keeps sharing driver-free; the driver is only for video sync (section 5).
+While a Mac shares, apps play to Ensemble's sound device (an Audio Server plug-in in `Driver/`), and
+Ensemble reads the sound back from a hidden twin of that device on the same clock. From an app's sound
+to Ensemble's timeline takes 8.5 ms. The first version captured with a Core Audio process tap on every
+app, which needed no install but took 69 ms (85 ms before we cut the buffers to 128 frames) and a
+"record this Mac's sound" permission. The device is needed for video sync anyway (section 5), so it now
+does both, and the tap is gone.
 
-The capture runs all the time while a Mac shares, with sleep still allowed. We tried starting it only
-when an app plays: it lost about 0.46 s at the start of every sound after a quiet spell. A running tap
-keeps even a new app's very first frame.
+Each frame in the device carries the sample time it was written for, and a read returns a frame only
+if that time matches, else silence: a late or missing frame is never replaced by one from a lap
+before. The capture runs all the time while a Mac shares, with sleep still allowed. We tried starting
+it only when an app plays: it lost about 0.46 s at the start of every sound after a quiet spell. With
+the capture running, an app that starts 0.15 s before its first sound keeps it.
 
 ## 2. Several outputs on one Mac: not one aggregate device
 
@@ -35,7 +40,7 @@ back its main output, by about 95 ms with the Bluetooth speaker added and about 
 and no property reports it. Any timing built on top (the second Mac, video) was off by that unknown
 amount, and changed whenever you ticked a speaker.
 
-What we kept: the aggregate holds only the main output and the tap. Every other output runs on its own
+What we kept: the aggregate holds only the main output and the capture. Every other output runs on its own
 device and follows the main output's clock through a resampler (a PI loop that trims the playback rate).
 With the Bluetooth speaker ticked, the other Mac now measured 13.8 ms off before the tune and is aligned
 after it; unticked, -0.1 ms.
@@ -68,13 +73,12 @@ which is the speed of sound, so the last tune sets where the two Macs align.
 Every speaker now plays 0.16 to 0.28 s after the app, so video would run ahead. Video players hold the
 picture back by the latency the output device reports, so Ensemble installs its own sound device (an
 Audio Server plug-in in `Driver/`). While a Mac shares, apps play to it, and it reports the whole delay,
-capture path included (85 ms measured), as its latency. Players then wait for the sound on their own:
+capture path included (8.5 ms measured), as its latency. Players then wait for the sound on their own:
 video stayed lip-synced with the Bluetooth speaker ticked. The device exists only while
 Ensemble asks for it and goes when Ensemble quits.
 
 ## Not done, and why
 
 - Adaptive delay (shrink the budget when Wi-Fi is calm): kept simple for now; the fixed budget works.
-- A loopback driver for capture: see section 1.
 - AirPlay speakers as outputs: their 2 s buffer would hold every other speaker and the video back.
   Ideas welcome in the issues.
