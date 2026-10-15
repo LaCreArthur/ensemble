@@ -364,7 +364,8 @@ public final class StreamReceiver: @unchecked Sendable {
         }
     }
 
-    private func handle(_ type: UInt8, _ payload: [UInt8], arrival: Double) {
+    /// Not private so the tests can deliver a packet without a socket.
+    func handle(_ type: UInt8, _ payload: [UInt8], arrival: Double) {
         var reader = ByteReader(payload)
         switch type {
         case StreamPacket.audio: receiveAudio(&reader, arrival: arrival)

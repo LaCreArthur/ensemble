@@ -167,6 +167,11 @@ public struct OutputDevice: Hashable, Identifiable, Sendable {
         try CA.setScalar(CA.system, kAudioHardwarePropertyDefaultOutputDevice, device.id)
     }
 
+    /// A device not read from the system, so that the lead and lag arithmetic can be tested.
+    init(id: AudioObjectID, uid: String, name: String, transport: UInt32) {
+        self.id = id; self.uid = uid; self.name = name; self.transport = transport
+    }
+
     init?(id: AudioObjectID) {
         guard CA.channelCount(id, kAudioObjectPropertyScopeOutput) > 0,
               let uid = try? CA.string(id, kAudioDevicePropertyDeviceUID),
