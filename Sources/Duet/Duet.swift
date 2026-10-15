@@ -157,10 +157,6 @@ final class Duet {
     /// Universal Control rebuilds its direct link (every few minutes when idle) both routes stall up to
     /// about 150 ms.
     static let networkDelay = 0.15
-    /// Seconds from an app handing its sound to its output to that sound entering Ensemble's timeline:
-    /// macOS's capture (about 23 ms) and the engine's cycle (about 62 ms with 512-frame buffers), as
-    /// `duet-lab device-path` measures them. Part of the latency Ensemble's sound device reports.
-    static let capturePath = 0.086
     static let holdTime: TimeInterval = 300
 
     init() {
@@ -279,7 +275,7 @@ final class Duet {
         let headphones = self.headphones
         let sharing = isOn && !devices.isEmpty
         if !sharing, EnsembleDevice.isSystemOutput, let main { try? OutputDevice.setDefaultOutput(main) }   // before the device goes
-        EnsembleDevice.setLatency(sharing ? Self.capturePath + delay + (main?.outputLatency ?? 0) + trim : nil)
+        EnsembleDevice.setLatency(sharing ? Engine.capturePath + delay + (main?.outputLatency ?? 0) + trim : nil)
         let device = EnsembleDevice.id
         if headphones == nil, isOn || peer?.on == true {
             if sharing, device != nil {

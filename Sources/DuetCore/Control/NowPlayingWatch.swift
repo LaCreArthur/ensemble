@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// The app the system shows in Control Center's Now Playing, and whether it plays.
 public struct NowPlaying: Decodable, Equatable, Sendable {
@@ -36,6 +37,7 @@ public final class NowPlayingWatch: @unchecked Sendable {
         function run() {
           $.NSBundle.bundleWithPath('/System/Library/PrivateFrameworks/MediaRemote.framework/').load;
           ObjC.bindFunction('MRMediaRemoteRegisterForNowPlayingNotifications', ['void', ['id']]);
+          ObjC.bindFunction('exit', ['void', ['int']]);
           const R = $.NSClassFromString('MRNowPlayingRequest');
           const out = $.NSFileHandle.fileHandleWithStandardOutput;
           let last = null;
@@ -47,12 +49,20 @@ public final class NowPlayingWatch: @unchecked Sendable {
           $.MRMediaRemoteRegisterForNowPlayingNotifications($.NSOperationQueue.mainQueue.underlyingQueue);
           for (const name of ['kMRMediaRemoteNowPlayingApplicationIsPlayingDidChangeNotification', 'kMRMediaRemoteNowPlayingApplicationDidChangeNotification'])
             $.NSNotificationCenter.defaultCenter.addObserverForNameObjectQueueUsingBlock(name, $(), $.NSOperationQueue.mainQueue, report);
+          // Ensemble holds this script's input open: it closes when Ensemble quits or crashes, and the script ends.
+          const input = $.NSFileHandle.fileHandleWithStandardInput;
+          $.NSNotificationCenter.defaultCenter.addObserverForNameObjectQueueUsingBlock('NSFileHandleDataAvailableNotification', input, $.NSOperationQueue.mainQueue, () => {
+            if (Number(input.availableData.length) === 0) $.exit(0);   // the bridge gives the length as text
+            input.waitForDataInBackgroundAndNotify;
+          });
+          input.waitForDataInBackgroundAndNotify;
           report();
           for (;;) $.NSRunLoop.currentRunLoop.runModeBeforeDate($.NSDefaultRunLoopMode, $.NSDate.distantFuture);
         }
         """
     private let process = Process()
     private var buffer = Data()
+    private var stopped = false
 
     public init(onChange: @escaping @Sendable (NowPlaying) -> Void) {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
@@ -60,6 +70,12 @@ public final class NowPlayingWatch: @unchecked Sendable {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
+        process.standardInput = Pipe()
+        process.terminationHandler = { [weak self] process in
+            guard self?.stopped == false else { return }
+            Logger(subsystem: "com.lacrearthur.duet", category: "audio")
+                .error("Now Playing watch ended (status \(process.terminationStatus)): takeover and the playing state are off")
+        }
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             DispatchQueue.main.async { self?.read(data).forEach(onChange) }
@@ -70,7 +86,10 @@ public final class NowPlayingWatch: @unchecked Sendable {
 
     public func run() throws { try process.run() }
 
-    public func stop() { if process.isRunning { process.terminate() } }
+    public func stop() {
+        stopped = true
+        if process.isRunning { process.terminate() }
+    }
 
     /// Takes the script's output; returns the states in it.
     private func read(_ data: Data) -> [NowPlaying] {

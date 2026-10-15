@@ -80,6 +80,14 @@ public final class Engine: @unchecked Sendable {
     /// One cycle of the stream, interleaved stereo.
     private let scratch: UnsafeMutablePointer<Float>
     private static let maxFrames = 16_384
+    /// Frames per cycle of the capture and the main output. Each frame of it delays the sound twice (in,
+    /// then out): capture path 85.1 ms at 512, 69.1 at 128, 66.4 at 64; at 32 the timing wandered (2026-10-15).
+    static let cycleFrames: UInt32 = 128
+    /// Seconds from an app handing its sound to its output to that sound entering the timeline, as
+    /// `duet-lab device-path` measures it: about 22.7 ms until the tap stamps it, then the aggregate's input
+    /// and output safety offsets (1003 + 964 frames on a MacBook Pro) and two cycles. Part of the latency
+    /// Ensemble's sound device reports.
+    public static let capturePath = 0.069
 
     private let pendingClick = Atomic<Int>(-1)
     private let click: [Float]
@@ -123,6 +131,7 @@ public final class Engine: @unchecked Sendable {
         }
         do {
             try check(AudioHardwareCreateAggregateDevice(description as CFDictionary, &aggregateID), "create aggregate device")
+            try? CA.setScalar(aggregateID, kAudioDevicePropertyBufferFrameSize, Self.cycleFrames)
             outputLatencyFrames = CA.outputLatencyFrames(aggregateID)
             try check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, nil) { [unowned self] _, input, _, output, outputTime in
                 self.render(input: input, output: output, outputTime: outputTime)

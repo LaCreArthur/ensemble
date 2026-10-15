@@ -403,7 +403,7 @@ case "follow":
 case "device-path":
     // Silent: a child plays clicks on an output (--device) as an app would, the engine captures them (every
     // output at gain 0), and the engine's timeline says when each would be heard. Prints the latency
-    // Ensemble's sound device must report for that, and its capture part (Duet.capturePath): the rest is
+    // Ensemble's sound device must report for that, and its capture part (Engine.capturePath): the rest is
     // the delay and the main output's latency. The capture part does not depend on the device clicked on
     // (85.1 ms on the speakers, 86.1 ms on a virtual device, 2026-10-12).
     let name = option("device") ?? "MacBook Pro Speakers"
@@ -470,7 +470,7 @@ case "start-time":
     while engine.ring.writeIndex == 0, probe.now() < t0 + 3 { Thread.sleep(forTimeInterval: 0.001) }
     let t2 = probe.now()
     Thread.sleep(forTimeInterval: 0.3)
-    let source = (engine.heardTime(ofFrame: 0) ?? .nan) - 0.15 - Double(engine.outputLatencyFrames) / engine.sampleRate - 0.086
+    let source = (engine.heardTime(ofFrame: 0) ?? .nan) - 0.15 - Double(engine.outputLatencyFrames) / engine.sampleRate - Engine.capturePath
     print(String(format: "%@: start returned after %.0f ms, first capture after %.0f ms; the first frame captured left the app %.0f ms after the start began",
                  names.joined(separator: " + "), (t1 - t0) * 1000, (t2 - t0) * 1000, (source - t0) * 1000))
     engine.stop()
