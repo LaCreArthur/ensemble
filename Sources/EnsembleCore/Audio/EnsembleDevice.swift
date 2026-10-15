@@ -1,17 +1,38 @@
 import CoreAudio
 import Foundation
+import SharedSound
 
 /// Ensemble's sound device (Driver/EnsembleDevice.c), when installed. While this Mac shares its sound,
-/// apps play to it and Ensemble reads their sound from its hidden capture twin; the device reports the
-/// delay as its latency, so video players hold the picture back to match. Both exist only while Ensemble
-/// asks for them, and go when Ensemble exits. Without the driver, every call here does nothing and this
+/// apps play to it and Ensemble reads their sound from the memory the device shares with it (`Sound`);
+/// the device reports the delay as its latency, so video players hold the picture back to match. It
+/// exists only while Ensemble asks for it, and goes when Ensemble exits. Without the driver, every call here does nothing and this
 /// Mac cannot share. The app carries the driver and installs it on request.
 public enum EnsembleDevice {
     static let uid = "com.lacrearthur.ensemble.device"
-    static let captureUID = "com.lacrearthur.ensemble.capture"
     /// On the plug-in: the device's latency in frames, -1 for no device (a property list number).
     private static let attach: AudioObjectPropertySelector = 0x656E_6C64   // 'enld'
-    private static let sampleRate = 48_000.0
+    /// On the plug-in, for the process that made the device exist only: the shared sound memory's name.
+    private static let soundName: AudioObjectPropertySelector = 0x656E_7373   // 'enss'
+    static let sampleRate = 48_000.0
+
+    /// What apps play to the device, mapped read only while this lives. Only the process that made the
+    /// device exist can open it.
+    final class Sound: @unchecked Sendable {
+        let memory: UnsafePointer<SharedSound>
+
+        init?() {
+            guard let plugIn = translate(kAudioHardwarePropertyTranslateBundleIDToPlugIn, uid) else { return nil }
+            var address = CA.address(soundName)
+            var name: Unmanaged<CFString>?
+            var size = UInt32(MemoryLayout<CFString>.size)
+            guard AudioObjectGetPropertyData(plugIn, &address, 0, nil, &size, &name) == noErr,
+                  let name = name?.takeRetainedValue() as String?,
+                  let memory = SharedSoundMap(name) else { return nil }
+            self.memory = memory
+        }
+
+        deinit { SharedSoundUnmap(memory) }
+    }
 
     /// The device, while it exists.
     public static var id: AudioObjectID? { translate(kAudioHardwarePropertyTranslateUIDToDevice, uid) }

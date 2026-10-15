@@ -1,6 +1,7 @@
 import AudioToolbox
 import CoreAudio
 import Foundation
+import SharedSound
 import Synchronization
 
 /// Plays one stereo stream on one or more local output devices, all heard together. The stream is
@@ -17,7 +18,7 @@ import Synchronization
 /// the main output by an amount the engine cannot see.
 public final class Engine: @unchecked Sendable {
     public enum Input: Sendable {
-        /// What apps play to Ensemble's sound device, read back from its hidden capture twin.
+        /// What apps play to Ensemble's sound device, read from the memory it shares with Ensemble.
         case loopback
         /// The other Mac's stream.
         case network(StreamReceiver)
@@ -67,8 +68,14 @@ public final class Engine: @unchecked Sendable {
     public let latencyTrim = AtomicFloat(0)
     /// Loudest captured sample (linear) since the app last set it to 0: shows whether the capture hears the apps.
     public let capturePeak = AtomicFloat(0)
+    /// Seconds from an app handing its sound to Ensemble's device to that sound entering the timeline.
+    public let capturePath: Double
 
     private let receiver: StreamReceiver?
+    /// The device's sound and the playhead that follows its clock (the host clock) on the main output's
+    /// clock: set while the engine runs on this Mac's sound.
+    private var sound: EnsembleDevice.Sound?
+    private let capture: Playhead
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
 
@@ -81,10 +88,17 @@ public final class Engine: @unchecked Sendable {
     /// Frames per cycle of the capture and the main output. Each frame of it delays the sound twice (in,
     /// then out); at 32 frames the timing wandered and Core Audio reported overloads (2026-10-15).
     static let cycleFrames: UInt32 = 128
-    /// Seconds from an app handing its sound to Ensemble's device to that sound entering the timeline, as
-    /// `ensemble-lab device-path` measures it (8.5 ms on a MacBook Pro, the same with apps playing 128 or 512
-    /// frames per cycle; a process tap took 69 ms). Part of the latency Ensemble's sound device reports.
-    public static let capturePath = 0.0085
+
+    /// Seconds from an app handing its sound to Ensemble's device to that sound entering the timeline, with
+    /// `main` as the main output. Part of the latency Ensemble's sound device reports. The main output asks
+    /// for a cycle about its safety offset plus one cycle before playing it, and the cycle reads a cycle of
+    /// the device's sound plus the resampler's reach: the device must have written all of it by then, which
+    /// it does by each frame's own time. Plus 1 ms for a late IO thread. 8 ms on a MacBook Pro, as
+    /// `ensemble-lab device-path` measures it (a process tap took 69 ms).
+    public static func capturePath(main: OutputDevice) -> Double {
+        Double(main.safetyOffsetFrames + 2 * cycleFrames) / main.nominalSampleRate
+            + Double(Interpolator.half) / EnsembleDevice.sampleRate + 0.001
+    }
 
     private let pendingClick = Atomic<Int>(-1)
     private let click: [Float]
@@ -94,6 +108,8 @@ public final class Engine: @unchecked Sendable {
         if case .network(let receiver) = input { self.receiver = receiver } else { receiver = nil }
         self.outputs = outputs.map(Output.init)
         sampleRate = outputs[0].nominalSampleRate
+        capturePath = Self.capturePath(main: outputs[0])
+        capture = Playhead(ratio: EnsembleDevice.sampleRate / sampleRate)
         receiver?.prepare(outputRate: sampleRate, sourceRate: sourceRate > 0 ? sourceRate : sampleRate)
         scratch = .allocate(capacity: Self.maxFrames * 2)
         delayFrames = Int((delaySeconds * sampleRate).rounded())
@@ -117,15 +133,18 @@ public final class Engine: @unchecked Sendable {
             kAudioAggregateDeviceMainSubDeviceKey: main.uid,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
-            kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: main.uid]]
-                + (receiver == nil ? [[kAudioSubDeviceUIDKey: EnsembleDevice.captureUID, kAudioSubDeviceDriftCompensationKey: 1]] : []),
+            kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: main.uid]],
         ]
         do {
+            if receiver == nil {
+                guard let sound = EnsembleDevice.Sound() else { throw CoreAudioError(status: kAudioHardwareIllegalOperationError, what: "read Ensemble's sound device") }
+                self.sound = sound
+            }
             try check(AudioHardwareCreateAggregateDevice(description as CFDictionary, &aggregateID), "create aggregate device")
             try? CA.setScalar(aggregateID, kAudioDevicePropertyBufferFrameSize, Self.cycleFrames)
             outputLatencyFrames = CA.outputLatencyFrames(aggregateID)
-            try check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, nil) { [unowned self] _, input, _, output, outputTime in
-                self.render(input: input, output: output, outputTime: outputTime)
+            try check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, nil) { [unowned self] _, _, _, output, outputTime in
+                self.render(output: output, outputTime: outputTime)
             }, "create IO proc")
             try check(AudioDeviceStart(aggregateID, procID), "start aggregate device")
             for output in outputs.dropFirst() {
@@ -176,6 +195,7 @@ public final class Engine: @unchecked Sendable {
             AudioHardwareDestroyAggregateDevice(aggregateID)
             aggregateID = AudioObjectID(kAudioObjectUnknown)
         }
+        sound = nil
         try? CA.setScalar(CA.system, kAudioHardwarePropertySleepingIsAllowed, 1)
     }
 
@@ -198,8 +218,7 @@ public final class Engine: @unchecked Sendable {
 
     // MARK: IO thread
 
-    private func render(input: UnsafePointer<AudioBufferList>,
-                        output: UnsafeMutablePointer<AudioBufferList>,
+    private func render(output: UnsafeMutablePointer<AudioBufferList>,
                         outputTime: UnsafePointer<AudioTimeStamp>) {
         let buffers = UnsafeMutableAudioBufferListPointer(output)
         guard let first = buffers.first, first.mNumberChannels > 0 else { return }
@@ -216,7 +235,7 @@ public final class Engine: @unchecked Sendable {
         if let receiver {
             receiver.render(frames: frames, heardAt: heardAt, into: scratch)
         } else {
-            readInput(UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input)), frames: frames)
+            readApps(frames: frames, outputTime: ts)
         }
         applyMainGain(frames: frames)
         addPendingClick(start: start, frames: frames)
@@ -241,14 +260,21 @@ public final class Engine: @unchecked Sendable {
         if let heardAt { anchor.store(Anchor(frame: start, time: heardAt)) }
     }
 
-    /// Copies the capture twin's input (interleaved stereo, the device's only format) into `scratch`,
-    /// and keeps its loudest sample.
-    private func readInput(_ inputs: UnsafeMutableAudioBufferListPointer, frames: Int) {
-        let n = inputs.first.map { min(frames, Int($0.mDataByteSize) / (2 * MemoryLayout<Float>.size)) } ?? 0
-        if n > 0, let data = inputs[0].mData { scratch.update(from: data.assumingMemoryBound(to: Float.self), count: 2 * n) }
-        if n < frames { (scratch + 2 * n).update(repeating: 0, count: 2 * (frames - n)) }
+    /// Writes to `scratch` what apps played to Ensemble's device `capturePath` before this cycle's output
+    /// time, and keeps its loudest sample.
+    private func readApps(frames: Int, outputTime ts: AudioTimeStamp) {
+        guard let sound, ts.mFlags.contains(.hostTimeValid) else {
+            scratch.update(repeating: 0, count: frames * 2)
+            capture.reset()
+            return
+        }
+        let rate = EnsembleDevice.sampleRate
+        let target = SharedSoundSampleTime(sound.memory, ts.mHostTime) - capturePath * rate
+        _ = capture.render(target: target, rate: rate, nominal: rate / sampleRate, frames: frames, gain: 1, into: scratch) { first, count, into in
+            Int(SharedSoundRead(sound.memory, Int64(first), Int32(count), into))
+        }
         var peak = capturePeak.value
-        for i in 0..<2 * n { peak = max(peak, abs(scratch[i])) }
+        for i in 0..<2 * frames { peak = max(peak, abs(scratch[i])) }
         capturePeak.value = peak
     }
 

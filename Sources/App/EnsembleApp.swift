@@ -49,7 +49,7 @@ struct WelcomeView: View {
                 if !guide.device {
                     Text("Add the sound device first.")
                 } else if !guide.sharing {
-                    Text("Turn on sharing. If macOS asks, allow Ensemble to use the microphone: macOS names every sound input so, and Ensemble reads your apps' sound from its own device.")
+                    Text("Turn on sharing.")
                     Toggle("Share this Mac's sound", isOn: $ensemble.isOn).toggleStyle(.switch)
                 } else {
                     Text("Tick the speakers to play on. You can change them later in the menu bar.")

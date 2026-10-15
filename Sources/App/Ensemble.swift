@@ -277,7 +277,7 @@ final class Ensemble {
         let sharing = isOn && !devices.isEmpty
         let needsInstall = EnsembleDevice.needsInstall
         if !sharing, EnsembleDevice.isSystemOutput, let main { try? OutputDevice.setDefaultOutput(main) }   // before the device goes
-        EnsembleDevice.setLatency(sharing ? Engine.capturePath + delay + (main?.outputLatency ?? 0) + trim : nil)
+        EnsembleDevice.setLatency(sharing ? delay + (main.map { Engine.capturePath(main: $0) + $0.outputLatency } ?? 0) + trim : nil)
         let device = EnsembleDevice.id
         if headphones == nil, isOn || peer?.on == true {
             if sharing, device != nil {

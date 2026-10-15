@@ -1,7 +1,7 @@
 // Ensemble's sound device (an Audio Server plug-in, loaded by coreaudiod). While Ensemble shares this
-// Mac's sound, apps play to this device, and a hidden twin on the same clock, read only by Ensemble,
-// gives each sample back at the sample time it was played (a loopback): apps never see an input on the
-// device they play to. The device reports Ensemble's delay as its latency, so video players hold the
+// Mac's sound, apps play to this output-only device, and it writes each frame to shared memory that only
+// Ensemble knows the name of (Sources/SharedSound): Ensemble reads the sound there, without an input
+// stream, so macOS shows no microphone indicator. The device reports Ensemble's delay as its latency, so video players hold the
 // picture back by the same amount (as they do for AirPlay). Its volume and mute are values Ensemble
 // mirrors and applies itself.
 //
@@ -11,29 +11,34 @@
 
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <dispatch/dispatch.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <mach/mach_time.h>
 #include <os/log.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include "SharedSound.h"
 
 #define SAMPLE_RATE 48000.0
 #define CHANNELS 2
 #define ZERO_TIME_STAMP_PERIOD 16384
 #define DEVICE_NAME "Ensemble"
 #define DEVICE_UID "com.lacrearthur.ensemble.device"
-#define CAPTURE_UID "com.lacrearthur.ensemble.capture"
 #define MANUFACTURER "Ensemble"
 #define MIN_DB -64.0f
-/// The loopback holds one zero-time-stamp period: far more than an IO cycle's span from write to read.
-#define RING_FRAMES ZERO_TIME_STAMP_PERIOD
 
-enum { kPlugIn = kAudioObjectPlugInObject, kDevice = 2, kStream = 3, kVolume = 4, kMute = 5, kCapture = 6, kCaptureStream = 7 };
-/// Both devices run on one clock, so an aggregate needs no drift correction between them.
-enum { kClockDomain = 'ensm' };
+enum { kPlugIn = kAudioObjectPlugInObject, kDevice = 2, kStream = 3, kVolume = 4, kMute = 5 };
 /// CFNumber: the latency in frames while the device exists, -1 while it does not.
 enum { kAttach = 'enld' };
+/// CFString, read only by the process that attached the device: the name of the shared sound memory.
+enum { kSound = 'enss' };
 
 static AudioServerPlugInDriverInterface gInterface;
 static AudioServerPlugInDriverInterface *gInterfacePointer = &gInterface;
@@ -48,17 +53,18 @@ static _Atomic Boolean gAttached = false;
 static _Atomic UInt32 gLatency = 0;
 static _Atomic Float32 gVolume = 1;
 static _Atomic UInt32 gMuted = 0;
+/// The process the device exists for: the only one told the shared memory's name.
+static _Atomic pid_t gClientPID = 0;
+// The shared sound, made once per driver process (it lives as long as coreaudiod runs the driver; a
+// later process makes its own under a new random name). NULL if macOS refused it: Ensemble reads silence.
+static SharedSound *gShared;
+static char gSoundName[32];
 // The clock.
 static pthread_mutex_t gMutex = PTHREAD_MUTEX_INITIALIZER;
 static UInt64 gIOCount = 0;
 static Float64 gHostTicksPerFrame = 0;
 static UInt64 gAnchorHostTime = 0;
 static UInt64 gTimeStamps = 0;
-// The loopback: the output's IO thread writes each frame, then its sample time + 1; the capture's IO
-// thread reads a frame only while that stamp matches the sample time it asks for, so it never gives a
-// frame twice, a frame from an earlier lap, or one not written yet (silence instead).
-static Float32 gRing[RING_FRAMES * CHANNELS];
-static _Atomic UInt64 gStamp[RING_FRAMES];
 // Only touched on gQueue.
 static pid_t gClient = 0;
 static dispatch_source_t gWatch;
@@ -76,7 +82,7 @@ typedef struct {
         AudioValueRange range;
         AudioStreamBasicDescription format;
         AudioStreamRangedDescription rangedFormat;
-        AudioServerPlugInCustomPropertyInfo custom;
+        AudioServerPlugInCustomPropertyInfo custom[2];
         UInt32 channels[2];
         struct { AudioChannelLayout layout; AudioChannelDescription second; } layout;
     } v;
@@ -109,8 +115,6 @@ static Float32 DecibelsToScalar(Float32 db) { return Clamp(1 - db / MIN_DB); }
 // from the caller's data (the attach number, dB conversions) only get their size here.
 static Boolean Lookup(AudioObjectID object, const AudioObjectPropertyAddress *a, UInt32 qualifierSize, const void *qualifier, Value *out) {
     Boolean input = a->mScope == kAudioObjectPropertyScopeInput;
-    Boolean output = a->mScope == kAudioObjectPropertyScopeOutput;
-    Boolean capture = object == kCapture || object == kCaptureStream;
     switch (object) {
     case kPlugIn:
         switch (a->mSelector) {
@@ -120,54 +124,49 @@ static Boolean Lookup(AudioObjectID object, const AudioObjectPropertyAddress *a,
         case kAudioObjectPropertyManufacturer: STRING(MANUFACTURER);
         case kAudioObjectPropertyOwnedObjects:
         case kAudioPlugInPropertyDeviceList:
-            if (gAttached) IDS(kDevice, kCapture);
+            if (gAttached) IDS(kDevice);
             NONE();
         case kAudioPlugInPropertyTranslateUIDToDevice: {
             CFStringRef uid = gAttached && qualifierSize == sizeof(CFStringRef) && qualifier ? *(const CFStringRef *)qualifier : NULL;
             if (uid && CFStringCompare(uid, CFSTR(DEVICE_UID), 0) == kCFCompareEqualTo) U32(kDevice);
-            if (uid && CFStringCompare(uid, CFSTR(CAPTURE_UID), 0) == kCFCompareEqualTo) U32(kCapture);
             U32(kAudioObjectUnknown);
         }
         case kAudioPlugInPropertyResourceBundle: STRING("");
         case kAudioObjectPropertyCustomPropertyInfoList:
-            out->size = sizeof(AudioServerPlugInCustomPropertyInfo);
-            out->v.custom = (AudioServerPlugInCustomPropertyInfo){kAttach, kAudioServerPlugInCustomPropertyDataTypeCFPropertyList,
-                                                                  kAudioServerPlugInCustomPropertyDataTypeNone};
+            out->size = sizeof out->v.custom;
+            out->v.custom[0] = (AudioServerPlugInCustomPropertyInfo){kAttach, kAudioServerPlugInCustomPropertyDataTypeCFPropertyList,
+                                                                     kAudioServerPlugInCustomPropertyDataTypeNone};
+            out->v.custom[1] = (AudioServerPlugInCustomPropertyInfo){kSound, kAudioServerPlugInCustomPropertyDataTypeCFString,
+                                                                     kAudioServerPlugInCustomPropertyDataTypeNone};
             return true;
         case kAttach:
             out->size = sizeof(CFPropertyListRef);
             return true;
+        case kSound:
+            out->size = sizeof(CFStringRef);
+            return true;
         }
         return false;
     case kDevice:
-    case kCapture:
         switch (a->mSelector) {
         case kAudioObjectPropertyBaseClass: U32(kAudioObjectClassID);
         case kAudioObjectPropertyClass: U32(kAudioDeviceClassID);
         case kAudioObjectPropertyOwner: U32(kPlugIn);
-        case kAudioObjectPropertyName:
-            if (capture) STRING(DEVICE_NAME " capture");
-            STRING(DEVICE_NAME);
+        case kAudioObjectPropertyName: STRING(DEVICE_NAME);
         case kAudioObjectPropertyManufacturer: STRING(MANUFACTURER);
         case kAudioObjectPropertyOwnedObjects:
-            if (capture) { if (output) NONE(); IDS(kCaptureStream); }
             if (input) NONE();
             IDS(kStream, kVolume, kMute);
         case kAudioDevicePropertyStreams:
-            if (capture) { if (output) NONE(); IDS(kCaptureStream); }
             if (input) NONE();
             IDS(kStream);
-        case kAudioObjectPropertyControlList:
-            if (capture) NONE();
-            IDS(kVolume, kMute);
+        case kAudioObjectPropertyControlList: IDS(kVolume, kMute);
         case kAudioObjectPropertyCustomPropertyInfoList: NONE();
-        case kAudioDevicePropertyDeviceUID:
-            if (capture) STRING(CAPTURE_UID);
-            STRING(DEVICE_UID);
+        case kAudioDevicePropertyDeviceUID: STRING(DEVICE_UID);
         case kAudioDevicePropertyModelUID: STRING(DEVICE_UID ".model");
         case kAudioDevicePropertyTransportType: U32(kAudioDeviceTransportTypeVirtual);
-        case kAudioDevicePropertyRelatedDevices: IDS(kDevice, kCapture);
-        case kAudioDevicePropertyClockDomain: U32(kClockDomain);
+        case kAudioDevicePropertyRelatedDevices: IDS(kDevice);
+        case kAudioDevicePropertyClockDomain: U32(0);   // no other device shares its clock; Core Audio needs the property
         case kAudioDevicePropertyDeviceIsAlive: U32(1);
         case kAudioDevicePropertyDeviceIsRunning: {
             pthread_mutex_lock(&gMutex);
@@ -175,11 +174,11 @@ static Boolean Lookup(AudioObjectID object, const AudioObjectPropertyAddress *a,
             pthread_mutex_unlock(&gMutex);
             U32(running);
         }
-        case kAudioDevicePropertyDeviceCanBeDefaultDevice: U32(!capture && !input);
+        case kAudioDevicePropertyDeviceCanBeDefaultDevice: U32(!input);
         case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice: U32(0);
-        case kAudioDevicePropertyLatency: U32(capture || input ? 0 : gLatency);
+        case kAudioDevicePropertyLatency: U32(input ? 0 : gLatency);
         case kAudioDevicePropertySafetyOffset: U32(0);
-        case kAudioDevicePropertyIsHidden: U32(capture);
+        case kAudioDevicePropertyIsHidden: U32(0);
         case kAudioDevicePropertyZeroTimeStampPeriod: U32(ZERO_TIME_STAMP_PERIOD);
         case kAudioDevicePropertyNominalSampleRate:
             out->size = sizeof(Float64);
@@ -205,15 +204,14 @@ static Boolean Lookup(AudioObjectID object, const AudioObjectPropertyAddress *a,
         }
         return false;
     case kStream:
-    case kCaptureStream:
         switch (a->mSelector) {
         case kAudioObjectPropertyBaseClass: U32(kAudioObjectClassID);
         case kAudioObjectPropertyClass: U32(kAudioStreamClassID);
-        case kAudioObjectPropertyOwner: U32(capture ? kCapture : kDevice);
+        case kAudioObjectPropertyOwner: U32(kDevice);
         case kAudioObjectPropertyOwnedObjects: NONE();
         case kAudioStreamPropertyIsActive: U32(1);
-        case kAudioStreamPropertyDirection: U32(capture);
-        case kAudioStreamPropertyTerminalType: U32(capture ? kAudioStreamTerminalTypeLine : kAudioStreamTerminalTypeSpeaker);
+        case kAudioStreamPropertyDirection: U32(0);
+        case kAudioStreamPropertyTerminalType: U32(kAudioStreamTerminalTypeSpeaker);
         case kAudioStreamPropertyStartingChannel: U32(1);
         case kAudioStreamPropertyLatency: U32(0);
         case kAudioStreamPropertyVirtualFormat:
@@ -287,9 +285,12 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID obje
                                 UInt32 qualifierSize, const void *qualifier, UInt32 inSize, UInt32 *outSize, void *data) {
     Value v;
     if (!Lookup(object, a, qualifierSize, qualifier, &v)) return kAudioHardwareUnknownPropertyError;
-    Boolean computed = (object == kPlugIn && a->mSelector == kAttach) || (object == kVolume && v.size == sizeof(Float32));
+    Boolean computed = (object == kPlugIn && (a->mSelector == kAttach || a->mSelector == kSound)) || (object == kVolume && v.size == sizeof(Float32));
     if (computed && inSize < v.size) return kAudioHardwareBadPropertySizeError;
-    if (object == kPlugIn && a->mSelector == kAttach) {
+    if (object == kPlugIn && a->mSelector == kSound) {
+        if (!gShared || !gAttached || pid != gClientPID) return kAudioHardwareIllegalOperationError;
+        *(CFStringRef *)data = CFStringCreateWithCString(NULL, gSoundName, kCFStringEncodingUTF8);   // the host releases it
+    } else if (object == kPlugIn && a->mSelector == kAttach) {
         SInt64 value = gAttached ? (SInt64)gLatency : -1;
         *(CFPropertyListRef *)data = CFNumberCreate(NULL, kCFNumberSInt64Type, &value);   // the host releases it
     } else if (object == kVolume && a->mSelector == kAudioLevelControlPropertyConvertScalarToDecibels) {
@@ -331,6 +332,7 @@ static void Watch(pid_t client) {
         if (gClient != client) return;
         os_log(gLog, "process %d exited: removing the device", client);
         gAttached = false;
+        gClientPID = 0;
         Watch(0);
         DeviceListChanged();
     });
@@ -340,6 +342,7 @@ static void Watch(pid_t client) {
 static void Attach(pid_t client, SInt64 frames) {
     Boolean attach = frames >= 0;
     UInt32 latency = attach ? (UInt32)frames : 0;
+    gClientPID = attach ? client : 0;
     Boolean was = atomic_exchange(&gAttached, attach);
     Boolean latencyChanged = was && attach && latency != gLatency;
     if (attach && !was) gLatency = latency;
@@ -391,6 +394,25 @@ static HRESULT QueryInterface(void *d, REFIID uuid, LPVOID *out) {
 static ULONG AddRef(void *d) { return ++gRefCount; }
 static ULONG Release(void *d) { return gRefCount > 0 ? --gRefCount : 0; }
 
+// Makes the shared sound memory under a random name, readable by other users' processes (Ensemble does
+// not run as coreaudiod's user) that know the name, writable only here.
+static void ShareSound(void) {
+    snprintf(gSoundName, sizeof gSoundName, "/ensemble.%08x%08x", arc4random(), arc4random());
+    int fd = shm_open(gSoundName, O_RDWR | O_CREAT | O_EXCL, 0644);
+    if (fd < 0) return os_log_error(gLog, "cannot make the shared sound memory: error %d", errno);
+    struct stat info;
+    void *memory = ftruncate(fd, sizeof(SharedSound)) == 0 ? mmap(NULL, sizeof(SharedSound), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0) : MAP_FAILED;
+    int error = errno;
+    if (fstat(fd, &info) == 0 && (info.st_mode & 0004) == 0) os_log_error(gLog, "shared sound memory mode %o: Ensemble cannot read it", info.st_mode & 0777);
+    close(fd);
+    if (memory == MAP_FAILED) {
+        shm_unlink(gSoundName);
+        return os_log_error(gLog, "cannot map the shared sound memory: error %d", error);
+    }
+    gShared = memory;
+    gShared->hostTicksPerFrame = gHostTicksPerFrame;
+}
+
 static OSStatus Initialize(AudioServerPlugInDriverRef d, AudioServerPlugInHostRef host) {
     gHost = host;
     gQueue = dispatch_queue_create("com.lacrearthur.ensemble.device", DISPATCH_QUEUE_SERIAL);
@@ -398,6 +420,7 @@ static OSStatus Initialize(AudioServerPlugInDriverRef d, AudioServerPlugInHostRe
     mach_timebase_info_data_t timebase;
     mach_timebase_info(&timebase);
     gHostTicksPerFrame = 1e9 * timebase.denom / timebase.numer / SAMPLE_RATE;
+    ShareSound();
     return noErr;
 }
 
@@ -417,13 +440,14 @@ static OSStatus PerformDeviceConfigurationChange(AudioServerPlugInDriverRef d, A
 
 static OSStatus AbortDeviceConfigurationChange(AudioServerPlugInDriverRef d, AudioObjectID device, UInt64 action, void *info) { return noErr; }
 
-// MARK: IO (a clock on the host clock, and the loopback)
+// MARK: IO (a clock on the host clock, and the shared sound)
 
 static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID device, UInt32 client) {
     pthread_mutex_lock(&gMutex);
-    if (gIOCount++ == 0) {   // both devices share the clock: it starts with the first one
+    if (gIOCount++ == 0) {
         gTimeStamps = 0;
         gAnchorHostTime = mach_absolute_time();
+        if (gShared) SharedSoundRestart(gShared, gAnchorHostTime);
     }
     pthread_mutex_unlock(&gMutex);
     return noErr;
@@ -448,7 +472,7 @@ static OSStatus GetZeroTimeStamp(AudioServerPlugInDriverRef d, AudioObjectID dev
 }
 
 static OSStatus WillDoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID device, UInt32 client, UInt32 operation, Boolean *willDo, Boolean *inPlace) {
-    *willDo = operation == (device == kCapture ? kAudioServerPlugInIOOperationReadInput : kAudioServerPlugInIOOperationWriteMix);
+    *willDo = operation == kAudioServerPlugInIOOperationWriteMix;
     *inPlace = true;
     return noErr;
 }
@@ -456,26 +480,9 @@ static OSStatus WillDoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID de
 static OSStatus BeginIOOperation(AudioServerPlugInDriverRef d, AudioObjectID device, UInt32 client, UInt32 operation, UInt32 frames, const AudioServerPlugInIOCycleInfo *cycle) { return noErr; }
 static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID device, AudioObjectID stream, UInt32 client, UInt32 operation, UInt32 frames,
                               const AudioServerPlugInIOCycleInfo *cycle, void *main, void *secondary) {
-    Boolean write = operation == kAudioServerPlugInIOOperationWriteMix;
-    if (!write && operation != kAudioServerPlugInIOOperationReadInput) return noErr;
-    UInt64 start = (UInt64)(write ? cycle->mOutputTime : cycle->mInputTime).mSampleTime;
-    Float32 *sound = main;
-    for (UInt32 i = 0; i < frames; i++) {
-        UInt64 time = start + i;
-        UInt32 at = (UInt32)(time % RING_FRAMES);
-        Float32 *frame = gRing + at * CHANNELS, *own = sound + i * CHANNELS;
-        if (write) {
-            atomic_store_explicit(&gStamp[at], 0, memory_order_relaxed);
-            atomic_thread_fence(memory_order_release);
-            memcpy(frame, own, CHANNELS * sizeof(Float32));
-            atomic_store_explicit(&gStamp[at], time + 1, memory_order_release);
-        } else {
-            Boolean ok = atomic_load_explicit(&gStamp[at], memory_order_acquire) == time + 1;
-            if (ok) memcpy(own, frame, CHANNELS * sizeof(Float32));
-            atomic_thread_fence(memory_order_acquire);
-            if (!ok || atomic_load_explicit(&gStamp[at], memory_order_relaxed) != time + 1) memset(own, 0, CHANNELS * sizeof(Float32));
-        }
-    }
+    if (operation != kAudioServerPlugInIOOperationWriteMix || !gShared) return noErr;
+    UInt64 start = (UInt64)cycle->mOutputTime.mSampleTime;
+    for (UInt32 i = 0; i < frames; i++) SharedSoundWrite(gShared, start + i, (Float32 *)main + i * CHANNELS);
     return noErr;
 }
 static OSStatus EndIOOperation(AudioServerPlugInDriverRef d, AudioObjectID device, UInt32 client, UInt32 operation, UInt32 frames, const AudioServerPlugInIOCycleInfo *cycle) { return noErr; }

@@ -187,6 +187,11 @@ public struct OutputDevice: Hashable, Identifiable, Sendable {
     /// Seconds between handing a frame to the device and hearing it, as the device reports.
     public var outputLatency: Double { Double(outputLatencyFrames) / nominalSampleRate }
 
+    /// Frames before a frame's output time by which the device needs it.
+    public var safetyOffsetFrames: UInt32 {
+        (try? CA.scalar(id, kAudioDevicePropertySafetyOffset, kAudioObjectPropertyScopeOutput, as: UInt32.self)) ?? 0
+    }
+
     /// Frames the device asks for in each cycle.
     public var bufferFrames: UInt32 { (try? CA.scalar(id, kAudioDevicePropertyBufferFrameSize, as: UInt32.self)) ?? 512 }
 }

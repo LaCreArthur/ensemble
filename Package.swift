@@ -9,8 +9,10 @@ let package = Package(
         .executable(name: "ensemble-lab", targets: ["EnsembleLab"]),
     ],
     targets: [
+        .target(name: "SharedSound"),
         .target(
             name: "EnsembleCore",
+            dependencies: ["SharedSound"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
