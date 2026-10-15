@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import DuetCore
+@testable import EnsembleCore
 
 /// How far ahead of the main output every other output has to read the stream. Too little and the
 /// output plays frames the ring does not hold yet; too much and it is heard late.

@@ -7,8 +7,8 @@ import Foundation
 /// asks for them, and go when Ensemble exits. Without the driver, every call here does nothing and this
 /// Mac cannot share. The app carries the driver and installs it on request.
 public enum EnsembleDevice {
-    static let uid = "com.lacrearthur.duet.device"
-    static let captureUID = "com.lacrearthur.duet.capture"
+    static let uid = "com.lacrearthur.ensemble.device"
+    static let captureUID = "com.lacrearthur.ensemble.capture"
     /// On the plug-in: the device's latency in frames, -1 for no device (a property list number).
     private static let attach: AudioObjectPropertySelector = 0x656E_6C64   // 'enld'
     private static let sampleRate = 48_000.0

@@ -2,30 +2,30 @@
 import PackageDescription
 
 let package = Package(
-    name: "Duet",
+    name: "Ensemble",
     platforms: [.macOS("26.0")],
     products: [
-        .executable(name: "Ensemble", targets: ["Duet"]),
-        .executable(name: "duet-lab", targets: ["DuetLab"]),
+        .executable(name: "Ensemble", targets: ["App"]),
+        .executable(name: "ensemble-lab", targets: ["EnsembleLab"]),
     ],
     targets: [
         .target(
-            name: "DuetCore",
+            name: "EnsembleCore",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
-            name: "Duet",
-            dependencies: ["DuetCore"],
+            name: "App",
+            dependencies: ["EnsembleCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
-            name: "DuetCoreTests",
-            dependencies: ["DuetCore"],
+            name: "EnsembleCoreTests",
+            dependencies: ["EnsembleCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
-            name: "DuetLab",
-            dependencies: ["DuetCore"],
+            name: "EnsembleLab",
+            dependencies: ["EnsembleCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

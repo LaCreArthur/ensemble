@@ -1,101 +1,101 @@
 # path<TAB>exact source text<TAB>the deliberate bug (\n for a newline). Run: scripts/mutants.py
-Sources/DuetCore/Control/NowPlayingWatch.swift	        guard let last, now.playing, now.app != own else { return false }	        guard let last, now.playing else { return false }
-Sources/DuetCore/Control/NowPlayingWatch.swift	        guard let last, now.playing, now.app != own else { return false }	        let last = last ?? NowPlaying(playing: false, app: nil)\n        guard now.playing, now.app != own else { return false }
-Sources/DuetCore/Control/NowPlayingWatch.swift	        guard let last, now.playing, now.app != own else { return false }	        guard let last, now.app != own else { return false }
-Sources/DuetCore/Control/NowPlayingWatch.swift	        return !last.playing || last.app != now.app	        return !last.playing
-Sources/DuetCore/Control/NowPlayingWatch.swift	        return !last.playing || last.app != now.app	        return last.app != now.app
-Sources/DuetCore/Control/NowPlayingWatch.swift	        defer { last = now }	        defer { if last == nil { last = now } }
-Sources/DuetCore/Audio/FrameRing.swift	let pos = (start + done) & mask\n            let n = min(frames - done, capacity - pos)\n            (storage + pos * 2).update(from: source	let pos = done & mask\n            let n = min(frames - done, capacity - pos)\n            (storage + pos * 2).update(from: source
-Sources/DuetCore/Audio/FrameRing.swift	let pos = (index + done) & mask	let pos = index & mask
-Sources/DuetCore/Audio/FrameRing.swift	guard index >= 0, index + frames <= end, index >= end - capacity else { return false }	guard index >= 0, index + frames <= end + 1, index >= end - capacity else { return false }
-Sources/DuetCore/Audio/FrameRing.swift	index >= end - capacity else { return false }	index > end - capacity else { return false }
-Sources/DuetCore/Audio/FrameRing.swift	while c < capacityFrames { c <<= 1 }	while c <= capacityFrames { c <<= 1 }
-Sources/DuetCore/Audio/FrameRing.swift	(storage + pos * 2).update(repeating: 0, count: n * 2)\n            done += n\n        }\n        written.store(start + frames, ordering: .releasing)	(storage + pos * 2).update(repeating: 0, count: n * 2)\n            done += n\n        }\n        written.store(start, ordering: .releasing)
-Sources/DuetCore/Audio/FrameRing.swift	let pos = (start + done) & mask\n            let n = min(frames - done, capacity - pos)\n            (storage + pos * 2).update(repeating: 0	let pos = done & mask\n            let n = min(frames - done, capacity - pos)\n            (storage + pos * 2).update(repeating: 0
-Sources/DuetCore/Audio/Interpolator.swift	let t = Double(k - half + 1) - fraction	let t = Double(k - half + 1) + fraction
-Sources/DuetCore/Audio/Interpolator.swift	let sinc = t == 0 ? 2 * cutoff : sin(2 * .pi * cutoff * t) / (.pi * t)	let sinc = sin(2 * .pi * cutoff * t) / (.pi * t)
-Sources/DuetCore/Audio/Interpolator.swift	let scaled = (position - whole) * Double(Self.phases)	let scaled = (position - whole) * Double(Self.phases - 1)
-Sources/DuetCore/Audio/Interpolator.swift	let alpha = Float(scaled - Double(phase))	let alpha = Float(0)
-Sources/DuetCore/Audio/Interpolator.swift	let first = (Int(whole) - half + 1 - inputStart) * 2	let first = (Int(whole) - half - inputStart) * 2
-Sources/DuetCore/Audio/Interpolator.swift	let gainStep = (gain.1 - gain.0) / Float(max(1, count))	let gainStep = (gain.0 - gain.1) / Float(max(1, count))
-Sources/DuetCore/Audio/Interpolator.swift	let position = start + Double(i) * step	let position = start + Double(i)
-Sources/DuetCore/Audio/Playhead.swift	let jumped = position == nil || abs(target - position!) > 0.01 * rate	let jumped = position == nil || abs(target - position!) > 0.1 * rate
-Sources/DuetCore/Audio/Playhead.swift	let error = (target - position!) / rate	let error = (position! - target) / rate
-Sources/DuetCore/Audio/Playhead.swift	let correction = max(-1e-3, min(1e-3, 0.5 * error + integral))	let correction = max(-1e-1, min(1e-1, 0.5 * error + integral))
-Sources/DuetCore/Audio/Playhead.swift	integral = max(-5e-4, min(5e-4, integral + 0.0625 * error * dt))	integral = max(-5e-4, min(5e-4, integral + 0.0625 * error))
-Sources/DuetCore/Audio/Playhead.swift	let step = nominal * (1 + correction)	let step = nominal * (1 - correction)
-Sources/DuetCore/Audio/Playhead.swift	position! += Double(frames) * step	position! += Double(frames) * nominal
-Sources/DuetCore/Audio/Playhead.swift	guard span <= Self.inputCapacity else {	guard span <= Self.inputCapacity / 2 else {
-Sources/DuetCore/Audio/Playhead.swift	output.update(repeating: 0, count: frames * 2)\n            position = nil\n            return nil	output.update(repeating: 0, count: frames * 2)\n            return nil
-Sources/DuetCore/Audio/Playhead.swift	let missing = fetch(first, span, input)	let missing = 0; _ = fetch(first, span, input)
-Sources/DuetCore/Audio/Playhead.swift	func reset() { position = nil }	func reset() { }
-Sources/DuetCore/Audio/Playhead.swift	if jumped {\n            position = target\n            integral = 0\n        }	if jumped {\n            position = target\n        }
-Sources/DuetCore/Link/ClockSync.swift	let roundTrip = (t4 - t1) - (t3 - t2)	let roundTrip = (t4 - t1) + (t3 - t2)
-Sources/DuetCore/Link/ClockSync.swift	offset: ((t2 - t1) + (t3 - t4)) / 2	offset: ((t2 - t1) - (t3 - t4)) / 2
-Sources/DuetCore/Link/ClockSync.swift	guard roundTrip >= 0, roundTrip < 0.5 else { return }	guard roundTrip >= -1, roundTrip < 0.5 else { return }
-Sources/DuetCore/Link/ClockSync.swift	guard roundTrip >= 0, roundTrip < 0.5 else { return }	guard roundTrip >= 0, roundTrip < 50 else { return }
-Sources/DuetCore/Link/ClockSync.swift	if let model, abs(sample.offset - model.offset(at: sample.time)) > 0.25 { reset() }	if let model, abs(sample.offset - model.offset(at: sample.time)) > 25 { reset() }
-Sources/DuetCore/Link/ClockSync.swift	let fastest = samples.sorted { $0.roundTrip < $1.roundTrip }.prefix(max(10, samples.count / 10))	let fastest = samples.sorted { $0.roundTrip < $1.roundTrip }.prefix(samples.count)
-Sources/DuetCore/Link/ClockSync.swift	if sxx > 0 { drift = max(-1e-4, min(1e-4, sxy / sxx)) }	if sxx > 0 { drift = sxy / sxx }
-Sources/DuetCore/Link/ClockSync.swift	if sxx > 0 { drift = max(-1e-4, min(1e-4, sxy / sxx)) }	if sxx > 0 { drift = max(-1e-4, min(1e-4, -sxy / sxx)) }
-Sources/DuetCore/Link/ClockSync.swift	func offset(at t: Double) -> Double { offset + drift * (t - time) }	func offset(at t: Double) -> Double { offset - drift * (t - time) }
-Sources/DuetCore/Link/ClockSync.swift	if let first = samples.first, sample.time - first.time >= 20, fastest.count >= 10 {	if let first = samples.first, sample.time - first.time >= 0, fastest.count >= 10 {
-Sources/DuetCore/Link/ClockSync.swift	samples.removeAll { $0.time < sample.time - Self.window }	samples.removeAll { $0.time < sample.time - Self.window * 100 }
-Sources/DuetCore/Link/ClockSync.swift	samples.removeAll()\n        model = nil	model = nil
-Sources/DuetCore/Link/Wire.swift	let clear = [type] + n.littleEndianBytes	let clear = [type]
-Sources/DuetCore/Link/Wire.swift	let payload = Seal.open(packet[9...], key: receiveKey, counter: n, aad: packet[..<9])	let payload = Seal.open(packet[9...], key: receiveKey, counter: n + 1, aad: packet[..<9])
-Sources/DuetCore/Link/Wire.swift	let payload = Seal.open(packet[9...], key: receiveKey, counter: n, aad: packet[..<9])	let payload = Seal.open(packet[9...], key: sendKey, counter: n, aad: packet[..<9])
-Sources/DuetCore/Link/Wire.swift	HKDF<SHA256>.deriveKey(inputKeyMaterial: secret, salt: salt, info: Data(info.utf8), outputByteCount: 32)	HKDF<SHA256>.deriveKey(inputKeyMaterial: secret, salt: salt, info: Data(), outputByteCount: 32)
-Sources/DuetCore/Link/Wire.swift	ciphertext: sealed.dropLast(16), tag: sealed.suffix(16)	ciphertext: sealed.dropLast(15), tag: sealed.suffix(15)
-Sources/DuetCore/Link/Wire.swift	let n = counter.wrappingAdd(1, ordering: .relaxed).oldValue	let n = counter.wrappingAdd(0, ordering: .relaxed).oldValue
-Sources/DuetCore/Link/Wire.swift	guard offset + size <= bytes.endIndex else { return nil }	guard offset + size <= bytes.endIndex + 1 else { return nil }
-Sources/DuetCore/Link/Wire.swift	offset += size	offset += 1
-Sources/DuetCore/Link/Wire.swift	return T(littleEndian: value)	return T(bigEndian: value)
-Sources/DuetCore/Link/Wire.swift	var littleEndianBytes: [UInt8] { withUnsafeBytes(of: self.littleEndian) { Array($0) } }	var littleEndianBytes: [UInt8] { withUnsafeBytes(of: self.bigEndian) { Array($0) } }
-Sources/DuetCore/Link/Wire.swift	init(_ bytes: ArraySlice<UInt8>) { self.bytes = bytes; offset = bytes.startIndex }	init(_ bytes: ArraySlice<UInt8>) { self.bytes = bytes; offset = 0 }
-Sources/DuetCore/Link/Wire.swift	return clear + Seal.seal(payload, key: sendKey, counter: n, aad: clear)	return clear + Seal.seal(payload, key: sendKey, counter: n, aad: [])
-Sources/DuetCore/Audio/AcousticProbe.swift	let from = Int(((ref + minDelay) - recording.startTime) * rate)	let from = Int(((ref - minDelay) - recording.startTime) * rate)
-Sources/DuetCore/Audio/AcousticProbe.swift	let to = Int(((ref + maxDelay) - recording.startTime) * rate)	let to = Int(((ref + maxDelay) - recording.startTime) * rate) / 2
-Sources/DuetCore/Audio/AcousticProbe.swift	Arrival(delay: recording.startTime + Double(from + j) / rate - ref, strength: Double(y[j]) / noise)	Arrival(delay: recording.startTime + Double(from + j) / rate + ref, strength: Double(y[j]) / noise)
-Sources/DuetCore/Audio/AcousticProbe.swift	Arrival(delay: recording.startTime + Double(from + j) / rate - ref, strength: Double(y[j]) / noise)	Arrival(delay: recording.startTime + Double(j) / rate - ref, strength: Double(y[j]) / noise)
-Sources/DuetCore/Audio/AcousticProbe.swift	guard let j = y.indices.first(where: { y[$0] >= maxValue * 0.5 && isLocalMax($0) }) else { return [] }	guard let j = y.indices.last(where: { y[$0] >= maxValue * 0.5 && isLocalMax($0) }) else { return [] }
-Sources/DuetCore/Audio/AcousticProbe.swift	guard let j = y.indices.first(where: { y[$0] >= maxValue * 0.5 && isLocalMax($0) }) else { return [] }	guard let j = y.indices.first(where: { y[$0] >= maxValue * 0.95 && isLocalMax($0) }) else { return [] }
-Sources/DuetCore/Audio/AcousticProbe.swift	let noise = Double(max(sorted[sorted.count / 2] * 1.4826, 1e-9))	let noise = Double(max(sorted[0] * 1.4826, 1e-9))
-Sources/DuetCore/Audio/AcousticProbe.swift	if found.count >= peaks || Double(y[j]) / noise < 8 { break }	if found.count >= peaks || Double(y[j]) / noise < 0 { break }
-Sources/DuetCore/Audio/AcousticProbe.swift	if found.contains(where: { abs($0 - j) < Int(separation * rate) }) { continue }	if found.contains(where: { abs($0 - j) > Int(separation * rate) }) { continue }
-Sources/DuetCore/Audio/AcousticProbe.swift	return found.sorted().map(arrival)	return found.map(arrival)
-Sources/DuetCore/Audio/AcousticProbe.swift	let n = Int(sampleRate * 0.0015)	let n = Int(sampleRate * 0.015)
-Sources/DuetCore/Audio/AcousticProbe.swift	return Float(w * sin(2 * Double.pi * 4000 * Double(i) / sampleRate))	return Float(w * sin(2 * Double.pi * 1000 * Double(i) / sampleRate))
-Sources/DuetCore/Audio/AcousticProbe.swift	let w = 0.5 - 0.5 * cos(2 * Double.pi * Double(i) / Double(n - 1))	let w = 0.5 - 0.5 * cos(2 * Double.pi * Double(i) / Double(n))
-Sources/DuetCore/Audio/AcousticProbe.swift	guard from >= 0, to + click.count < recording.samples.count, to > from else { return [] }	guard from >= 0, to < recording.samples.count, to > from else { return [] }
-Sources/DuetCore/Link/Stream.swift	samples[i] = Float(reader.get(Int16.self) ?? 0) / 32767 * StreamPacket.headroom	samples[i] = Float(reader.get(Int16.self) ?? 0) / 32767
-Sources/DuetCore/Link/Stream.swift	guard tags[slot].load(ordering: .relaxed) != Int64(index) else { return }	guard tags[slot].load(ordering: .relaxed) == Int64(index) else { return }
-Sources/DuetCore/Link/Stream.swift	if highest >= 0, index <= highest - Self.slots / 2 { return }	if highest >= 0, index <= highest { return }
-Sources/DuetCore/Link/Stream.swift	if highest >= 0, index <= highest - Self.slots / 2 { return }	if highest >= 0, index <= highest - Self.slots * 4 { return }
-Sources/DuetCore/Link/Stream.swift	let recovered = missing.removeValue(forKey: index) != nil	let recovered = false
-Sources/DuetCore/Link/Stream.swift	for lost in (highest + 1)..<index { missing[lost] = (arrival, 0) }	for lost in (highest + 2)..<index { missing[lost] = (arrival, 0) }
-Sources/DuetCore/Link/Stream.swift	guard frame >= 0, frame % count == 0 else { return }	guard frame >= 0 else { return }
-Sources/DuetCore/Link/Stream.swift	let index = frame / count\n        if highest >= 0	let index = frame / count + 1\n        if highest >= 0
-Sources/DuetCore/Link/Stream.swift	let slot = index % Self.slots\n        guard tags[slot]	let slot = index % StreamPacket.frames\n        guard tags[slot]
-Sources/DuetCore/Link/Stream.swift	let slot = index % Self.slots\n            var ok = tags[slot]	let slot = index % StreamPacket.frames\n            var ok = tags[slot]
-Sources/DuetCore/Link/Stream.swift	for i in 0..<Self.slots { tags[i].store(-1, ordering: .relaxed) }	for i in 0..<1 { tags[i].store(-1, ordering: .relaxed) }
-Sources/DuetCore/Link/Stream.swift	let sourceTime = heardAt + m.clock.offset(at: heardAt)	let sourceTime = heardAt - m.clock.offset(at: heardAt)
-Sources/DuetCore/Link/Stream.swift	let target = Double(m.frame) + (sourceTime - m.time) * m.rate	let target = Double(m.frame) - (sourceTime - m.time) * m.rate
-Sources/DuetCore/Link/Stream.swift	let target = Double(m.frame) + (sourceTime - m.time) * m.rate	let target = Double(m.frame) + (sourceTime - m.time) / m.rate
-Sources/DuetCore/Link/Stream.swift	let index = frame / size, offset = frame % size	let index = frame / size, offset = frame % Self.slots
-Sources/DuetCore/Link/Stream.swift	if !ok {\n                destination.update(repeating: 0, count: n * 2)\n                missingFrames += n\n            }	if !ok {\n                missingFrames += n\n            }
-Sources/DuetCore/Link/Stream.swift	let n = min(count - done, size - offset)	let n = min(count - done, size)
-Sources/DuetCore/Link/Stream.swift	stats.concealed += r.missing > 0 ? frames : 0	stats.concealed += 0
-Sources/DuetCore/Link/Stream.swift	guard let m = mapping.load(), let heardAt else {	guard let m = mapping.load() else { return }\n        guard let heardAt = heardAt ?? Optional(0) else {
-Sources/DuetCore/Link/Stream.swift	gain: m.gain,	gain: 1,
-Sources/DuetCore/Link/Stream.swift	let margin = Double(m.frame + StreamPacket.frames - 1 - r.last) / m.rate	let margin = Double(m.frame + StreamPacket.frames - 1 - r.last) * m.rate
-Sources/DuetCore/Audio/Engine.swift	guard device != main else { return 0 }	guard device == main else { return 0 }
-Sources/DuetCore/Audio/Engine.swift	return max(0, device.outputLatency + lag - main.outputLatency + cycle + 0.005)	return device.outputLatency + lag - main.outputLatency + cycle + 0.005
-Sources/DuetCore/Audio/Engine.swift	return max(0, device.outputLatency + lag - main.outputLatency + cycle + 0.005)	return max(0, device.outputLatency + lag - main.outputLatency + cycle - 0.005)
-Sources/DuetCore/Audio/Engine.swift	return max(0, device.outputLatency + lag - main.outputLatency + cycle + 0.005)	return max(0, device.outputLatency - lag - main.outputLatency + cycle + 0.005)
-Sources/DuetCore/Audio/Engine.swift	let cycle = Double(max(512, device.bufferFrames)) / device.nominalSampleRate	let cycle = Double(max(512, device.bufferFrames)) / device.nominalSampleRate / 2
-Sources/DuetCore/Audio/FrameRing.swift	(storage + pos * 2).update(from: source + done * 2, count: n * 2)	(storage + pos * 2).update(from: source + done, count: n * 2)
-Sources/DuetCore/Audio/Playhead.swift	position = target\n            integral = 0	position = target + 1_000\n            integral = 0
-Sources/DuetCore/Link/Wire.swift	guard packet.count >= 9 + 16 else { return nil }	guard packet.count >= 1 else { return nil }
-Sources/DuetCore/Link/Wire.swift	HKDF<SHA256>.deriveKey(inputKeyMaterial: secret, salt: salt, info: Data(info.utf8), outputByteCount: 32)	HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: Data(repeating: 0, count: 32)), salt: salt, info: Data(info.utf8), outputByteCount: 32)
-Sources/DuetCore/Link/Stream.swift	let gain = reader.float(), let rate = reader.float() else { return }	let gain = reader.float() else { return }\n        let rate = reader.float() ?? Float(48_000)
+Sources/EnsembleCore/Control/NowPlayingWatch.swift	        guard let last, now.playing, now.app != own else { return false }	        guard let last, now.playing else { return false }
+Sources/EnsembleCore/Control/NowPlayingWatch.swift	        guard let last, now.playing, now.app != own else { return false }	        let last = last ?? NowPlaying(playing: false, app: nil)\n        guard now.playing, now.app != own else { return false }
+Sources/EnsembleCore/Control/NowPlayingWatch.swift	        guard let last, now.playing, now.app != own else { return false }	        guard let last, now.app != own else { return false }
+Sources/EnsembleCore/Control/NowPlayingWatch.swift	        return !last.playing || last.app != now.app	        return !last.playing
+Sources/EnsembleCore/Control/NowPlayingWatch.swift	        return !last.playing || last.app != now.app	        return last.app != now.app
+Sources/EnsembleCore/Control/NowPlayingWatch.swift	        defer { last = now }	        defer { if last == nil { last = now } }
+Sources/EnsembleCore/Audio/FrameRing.swift	let pos = (start + done) & mask\n            let n = min(frames - done, capacity - pos)\n            (storage + pos * 2).update(from: source	let pos = done & mask\n            let n = min(frames - done, capacity - pos)\n            (storage + pos * 2).update(from: source
+Sources/EnsembleCore/Audio/FrameRing.swift	let pos = (index + done) & mask	let pos = index & mask
+Sources/EnsembleCore/Audio/FrameRing.swift	guard index >= 0, index + frames <= end, index >= end - capacity else { return false }	guard index >= 0, index + frames <= end + 1, index >= end - capacity else { return false }
+Sources/EnsembleCore/Audio/FrameRing.swift	index >= end - capacity else { return false }	index > end - capacity else { return false }
+Sources/EnsembleCore/Audio/FrameRing.swift	while c < capacityFrames { c <<= 1 }	while c <= capacityFrames { c <<= 1 }
+Sources/EnsembleCore/Audio/FrameRing.swift	(storage + pos * 2).update(repeating: 0, count: n * 2)\n            done += n\n        }\n        written.store(start + frames, ordering: .releasing)	(storage + pos * 2).update(repeating: 0, count: n * 2)\n            done += n\n        }\n        written.store(start, ordering: .releasing)
+Sources/EnsembleCore/Audio/FrameRing.swift	let pos = (start + done) & mask\n            let n = min(frames - done, capacity - pos)\n            (storage + pos * 2).update(repeating: 0	let pos = done & mask\n            let n = min(frames - done, capacity - pos)\n            (storage + pos * 2).update(repeating: 0
+Sources/EnsembleCore/Audio/Interpolator.swift	let t = Double(k - half + 1) - fraction	let t = Double(k - half + 1) + fraction
+Sources/EnsembleCore/Audio/Interpolator.swift	let sinc = t == 0 ? 2 * cutoff : sin(2 * .pi * cutoff * t) / (.pi * t)	let sinc = sin(2 * .pi * cutoff * t) / (.pi * t)
+Sources/EnsembleCore/Audio/Interpolator.swift	let scaled = (position - whole) * Double(Self.phases)	let scaled = (position - whole) * Double(Self.phases - 1)
+Sources/EnsembleCore/Audio/Interpolator.swift	let alpha = Float(scaled - Double(phase))	let alpha = Float(0)
+Sources/EnsembleCore/Audio/Interpolator.swift	let first = (Int(whole) - half + 1 - inputStart) * 2	let first = (Int(whole) - half - inputStart) * 2
+Sources/EnsembleCore/Audio/Interpolator.swift	let gainStep = (gain.1 - gain.0) / Float(max(1, count))	let gainStep = (gain.0 - gain.1) / Float(max(1, count))
+Sources/EnsembleCore/Audio/Interpolator.swift	let position = start + Double(i) * step	let position = start + Double(i)
+Sources/EnsembleCore/Audio/Playhead.swift	let jumped = position == nil || abs(target - position!) > 0.01 * rate	let jumped = position == nil || abs(target - position!) > 0.1 * rate
+Sources/EnsembleCore/Audio/Playhead.swift	let error = (target - position!) / rate	let error = (position! - target) / rate
+Sources/EnsembleCore/Audio/Playhead.swift	let correction = max(-1e-3, min(1e-3, 0.5 * error + integral))	let correction = max(-1e-1, min(1e-1, 0.5 * error + integral))
+Sources/EnsembleCore/Audio/Playhead.swift	integral = max(-5e-4, min(5e-4, integral + 0.0625 * error * dt))	integral = max(-5e-4, min(5e-4, integral + 0.0625 * error))
+Sources/EnsembleCore/Audio/Playhead.swift	let step = nominal * (1 + correction)	let step = nominal * (1 - correction)
+Sources/EnsembleCore/Audio/Playhead.swift	position! += Double(frames) * step	position! += Double(frames) * nominal
+Sources/EnsembleCore/Audio/Playhead.swift	guard span <= Self.inputCapacity else {	guard span <= Self.inputCapacity / 2 else {
+Sources/EnsembleCore/Audio/Playhead.swift	output.update(repeating: 0, count: frames * 2)\n            position = nil\n            return nil	output.update(repeating: 0, count: frames * 2)\n            return nil
+Sources/EnsembleCore/Audio/Playhead.swift	let missing = fetch(first, span, input)	let missing = 0; _ = fetch(first, span, input)
+Sources/EnsembleCore/Audio/Playhead.swift	func reset() { position = nil }	func reset() { }
+Sources/EnsembleCore/Audio/Playhead.swift	if jumped {\n            position = target\n            integral = 0\n        }	if jumped {\n            position = target\n        }
+Sources/EnsembleCore/Link/ClockSync.swift	let roundTrip = (t4 - t1) - (t3 - t2)	let roundTrip = (t4 - t1) + (t3 - t2)
+Sources/EnsembleCore/Link/ClockSync.swift	offset: ((t2 - t1) + (t3 - t4)) / 2	offset: ((t2 - t1) - (t3 - t4)) / 2
+Sources/EnsembleCore/Link/ClockSync.swift	guard roundTrip >= 0, roundTrip < 0.5 else { return }	guard roundTrip >= -1, roundTrip < 0.5 else { return }
+Sources/EnsembleCore/Link/ClockSync.swift	guard roundTrip >= 0, roundTrip < 0.5 else { return }	guard roundTrip >= 0, roundTrip < 50 else { return }
+Sources/EnsembleCore/Link/ClockSync.swift	if let model, abs(sample.offset - model.offset(at: sample.time)) > 0.25 { reset() }	if let model, abs(sample.offset - model.offset(at: sample.time)) > 25 { reset() }
+Sources/EnsembleCore/Link/ClockSync.swift	let fastest = samples.sorted { $0.roundTrip < $1.roundTrip }.prefix(max(10, samples.count / 10))	let fastest = samples.sorted { $0.roundTrip < $1.roundTrip }.prefix(samples.count)
+Sources/EnsembleCore/Link/ClockSync.swift	if sxx > 0 { drift = max(-1e-4, min(1e-4, sxy / sxx)) }	if sxx > 0 { drift = sxy / sxx }
+Sources/EnsembleCore/Link/ClockSync.swift	if sxx > 0 { drift = max(-1e-4, min(1e-4, sxy / sxx)) }	if sxx > 0 { drift = max(-1e-4, min(1e-4, -sxy / sxx)) }
+Sources/EnsembleCore/Link/ClockSync.swift	func offset(at t: Double) -> Double { offset + drift * (t - time) }	func offset(at t: Double) -> Double { offset - drift * (t - time) }
+Sources/EnsembleCore/Link/ClockSync.swift	if let first = samples.first, sample.time - first.time >= 20, fastest.count >= 10 {	if let first = samples.first, sample.time - first.time >= 0, fastest.count >= 10 {
+Sources/EnsembleCore/Link/ClockSync.swift	samples.removeAll { $0.time < sample.time - Self.window }	samples.removeAll { $0.time < sample.time - Self.window * 100 }
+Sources/EnsembleCore/Link/ClockSync.swift	samples.removeAll()\n        model = nil	model = nil
+Sources/EnsembleCore/Link/Wire.swift	let clear = [type] + n.littleEndianBytes	let clear = [type]
+Sources/EnsembleCore/Link/Wire.swift	let payload = Seal.open(packet[9...], key: receiveKey, counter: n, aad: packet[..<9])	let payload = Seal.open(packet[9...], key: receiveKey, counter: n + 1, aad: packet[..<9])
+Sources/EnsembleCore/Link/Wire.swift	let payload = Seal.open(packet[9...], key: receiveKey, counter: n, aad: packet[..<9])	let payload = Seal.open(packet[9...], key: sendKey, counter: n, aad: packet[..<9])
+Sources/EnsembleCore/Link/Wire.swift	HKDF<SHA256>.deriveKey(inputKeyMaterial: secret, salt: salt, info: Data(info.utf8), outputByteCount: 32)	HKDF<SHA256>.deriveKey(inputKeyMaterial: secret, salt: salt, info: Data(), outputByteCount: 32)
+Sources/EnsembleCore/Link/Wire.swift	ciphertext: sealed.dropLast(16), tag: sealed.suffix(16)	ciphertext: sealed.dropLast(15), tag: sealed.suffix(15)
+Sources/EnsembleCore/Link/Wire.swift	let n = counter.wrappingAdd(1, ordering: .relaxed).oldValue	let n = counter.wrappingAdd(0, ordering: .relaxed).oldValue
+Sources/EnsembleCore/Link/Wire.swift	guard offset + size <= bytes.endIndex else { return nil }	guard offset + size <= bytes.endIndex + 1 else { return nil }
+Sources/EnsembleCore/Link/Wire.swift	offset += size	offset += 1
+Sources/EnsembleCore/Link/Wire.swift	return T(littleEndian: value)	return T(bigEndian: value)
+Sources/EnsembleCore/Link/Wire.swift	var littleEndianBytes: [UInt8] { withUnsafeBytes(of: self.littleEndian) { Array($0) } }	var littleEndianBytes: [UInt8] { withUnsafeBytes(of: self.bigEndian) { Array($0) } }
+Sources/EnsembleCore/Link/Wire.swift	init(_ bytes: ArraySlice<UInt8>) { self.bytes = bytes; offset = bytes.startIndex }	init(_ bytes: ArraySlice<UInt8>) { self.bytes = bytes; offset = 0 }
+Sources/EnsembleCore/Link/Wire.swift	return clear + Seal.seal(payload, key: sendKey, counter: n, aad: clear)	return clear + Seal.seal(payload, key: sendKey, counter: n, aad: [])
+Sources/EnsembleCore/Audio/AcousticProbe.swift	let from = Int(((ref + minDelay) - recording.startTime) * rate)	let from = Int(((ref - minDelay) - recording.startTime) * rate)
+Sources/EnsembleCore/Audio/AcousticProbe.swift	let to = Int(((ref + maxDelay) - recording.startTime) * rate)	let to = Int(((ref + maxDelay) - recording.startTime) * rate) / 2
+Sources/EnsembleCore/Audio/AcousticProbe.swift	Arrival(delay: recording.startTime + Double(from + j) / rate - ref, strength: Double(y[j]) / noise)	Arrival(delay: recording.startTime + Double(from + j) / rate + ref, strength: Double(y[j]) / noise)
+Sources/EnsembleCore/Audio/AcousticProbe.swift	Arrival(delay: recording.startTime + Double(from + j) / rate - ref, strength: Double(y[j]) / noise)	Arrival(delay: recording.startTime + Double(j) / rate - ref, strength: Double(y[j]) / noise)
+Sources/EnsembleCore/Audio/AcousticProbe.swift	guard let j = y.indices.first(where: { y[$0] >= maxValue * 0.5 && isLocalMax($0) }) else { return [] }	guard let j = y.indices.last(where: { y[$0] >= maxValue * 0.5 && isLocalMax($0) }) else { return [] }
+Sources/EnsembleCore/Audio/AcousticProbe.swift	guard let j = y.indices.first(where: { y[$0] >= maxValue * 0.5 && isLocalMax($0) }) else { return [] }	guard let j = y.indices.first(where: { y[$0] >= maxValue * 0.95 && isLocalMax($0) }) else { return [] }
+Sources/EnsembleCore/Audio/AcousticProbe.swift	let noise = Double(max(sorted[sorted.count / 2] * 1.4826, 1e-9))	let noise = Double(max(sorted[0] * 1.4826, 1e-9))
+Sources/EnsembleCore/Audio/AcousticProbe.swift	if found.count >= peaks || Double(y[j]) / noise < 8 { break }	if found.count >= peaks || Double(y[j]) / noise < 0 { break }
+Sources/EnsembleCore/Audio/AcousticProbe.swift	if found.contains(where: { abs($0 - j) < Int(separation * rate) }) { continue }	if found.contains(where: { abs($0 - j) > Int(separation * rate) }) { continue }
+Sources/EnsembleCore/Audio/AcousticProbe.swift	return found.sorted().map(arrival)	return found.map(arrival)
+Sources/EnsembleCore/Audio/AcousticProbe.swift	let n = Int(sampleRate * 0.0015)	let n = Int(sampleRate * 0.015)
+Sources/EnsembleCore/Audio/AcousticProbe.swift	return Float(w * sin(2 * Double.pi * 4000 * Double(i) / sampleRate))	return Float(w * sin(2 * Double.pi * 1000 * Double(i) / sampleRate))
+Sources/EnsembleCore/Audio/AcousticProbe.swift	let w = 0.5 - 0.5 * cos(2 * Double.pi * Double(i) / Double(n - 1))	let w = 0.5 - 0.5 * cos(2 * Double.pi * Double(i) / Double(n))
+Sources/EnsembleCore/Audio/AcousticProbe.swift	guard from >= 0, to + click.count < recording.samples.count, to > from else { return [] }	guard from >= 0, to < recording.samples.count, to > from else { return [] }
+Sources/EnsembleCore/Link/Stream.swift	samples[i] = Float(reader.get(Int16.self) ?? 0) / 32767 * StreamPacket.headroom	samples[i] = Float(reader.get(Int16.self) ?? 0) / 32767
+Sources/EnsembleCore/Link/Stream.swift	guard tags[slot].load(ordering: .relaxed) != Int64(index) else { return }	guard tags[slot].load(ordering: .relaxed) == Int64(index) else { return }
+Sources/EnsembleCore/Link/Stream.swift	if highest >= 0, index <= highest - Self.slots / 2 { return }	if highest >= 0, index <= highest { return }
+Sources/EnsembleCore/Link/Stream.swift	if highest >= 0, index <= highest - Self.slots / 2 { return }	if highest >= 0, index <= highest - Self.slots * 4 { return }
+Sources/EnsembleCore/Link/Stream.swift	let recovered = missing.removeValue(forKey: index) != nil	let recovered = false
+Sources/EnsembleCore/Link/Stream.swift	for lost in (highest + 1)..<index { missing[lost] = (arrival, 0) }	for lost in (highest + 2)..<index { missing[lost] = (arrival, 0) }
+Sources/EnsembleCore/Link/Stream.swift	guard frame >= 0, frame % count == 0 else { return }	guard frame >= 0 else { return }
+Sources/EnsembleCore/Link/Stream.swift	let index = frame / count\n        if highest >= 0	let index = frame / count + 1\n        if highest >= 0
+Sources/EnsembleCore/Link/Stream.swift	let slot = index % Self.slots\n        guard tags[slot]	let slot = index % StreamPacket.frames\n        guard tags[slot]
+Sources/EnsembleCore/Link/Stream.swift	let slot = index % Self.slots\n            var ok = tags[slot]	let slot = index % StreamPacket.frames\n            var ok = tags[slot]
+Sources/EnsembleCore/Link/Stream.swift	for i in 0..<Self.slots { tags[i].store(-1, ordering: .relaxed) }	for i in 0..<1 { tags[i].store(-1, ordering: .relaxed) }
+Sources/EnsembleCore/Link/Stream.swift	let sourceTime = heardAt + m.clock.offset(at: heardAt)	let sourceTime = heardAt - m.clock.offset(at: heardAt)
+Sources/EnsembleCore/Link/Stream.swift	let target = Double(m.frame) + (sourceTime - m.time) * m.rate	let target = Double(m.frame) - (sourceTime - m.time) * m.rate
+Sources/EnsembleCore/Link/Stream.swift	let target = Double(m.frame) + (sourceTime - m.time) * m.rate	let target = Double(m.frame) + (sourceTime - m.time) / m.rate
+Sources/EnsembleCore/Link/Stream.swift	let index = frame / size, offset = frame % size	let index = frame / size, offset = frame % Self.slots
+Sources/EnsembleCore/Link/Stream.swift	if !ok {\n                destination.update(repeating: 0, count: n * 2)\n                missingFrames += n\n            }	if !ok {\n                missingFrames += n\n            }
+Sources/EnsembleCore/Link/Stream.swift	let n = min(count - done, size - offset)	let n = min(count - done, size)
+Sources/EnsembleCore/Link/Stream.swift	stats.concealed += r.missing > 0 ? frames : 0	stats.concealed += 0
+Sources/EnsembleCore/Link/Stream.swift	guard let m = mapping.load(), let heardAt else {	guard let m = mapping.load() else { return }\n        guard let heardAt = heardAt ?? Optional(0) else {
+Sources/EnsembleCore/Link/Stream.swift	gain: m.gain,	gain: 1,
+Sources/EnsembleCore/Link/Stream.swift	let margin = Double(m.frame + StreamPacket.frames - 1 - r.last) / m.rate	let margin = Double(m.frame + StreamPacket.frames - 1 - r.last) * m.rate
+Sources/EnsembleCore/Audio/Engine.swift	guard device != main else { return 0 }	guard device == main else { return 0 }
+Sources/EnsembleCore/Audio/Engine.swift	return max(0, device.outputLatency + lag - main.outputLatency + cycle + 0.005)	return device.outputLatency + lag - main.outputLatency + cycle + 0.005
+Sources/EnsembleCore/Audio/Engine.swift	return max(0, device.outputLatency + lag - main.outputLatency + cycle + 0.005)	return max(0, device.outputLatency + lag - main.outputLatency + cycle - 0.005)
+Sources/EnsembleCore/Audio/Engine.swift	return max(0, device.outputLatency + lag - main.outputLatency + cycle + 0.005)	return max(0, device.outputLatency - lag - main.outputLatency + cycle + 0.005)
+Sources/EnsembleCore/Audio/Engine.swift	let cycle = Double(max(512, device.bufferFrames)) / device.nominalSampleRate	let cycle = Double(max(512, device.bufferFrames)) / device.nominalSampleRate / 2
+Sources/EnsembleCore/Audio/FrameRing.swift	(storage + pos * 2).update(from: source + done * 2, count: n * 2)	(storage + pos * 2).update(from: source + done, count: n * 2)
+Sources/EnsembleCore/Audio/Playhead.swift	position = target\n            integral = 0	position = target + 1_000\n            integral = 0
+Sources/EnsembleCore/Link/Wire.swift	guard packet.count >= 9 + 16 else { return nil }	guard packet.count >= 1 else { return nil }
+Sources/EnsembleCore/Link/Wire.swift	HKDF<SHA256>.deriveKey(inputKeyMaterial: secret, salt: salt, info: Data(info.utf8), outputByteCount: 32)	HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: Data(repeating: 0, count: 32)), salt: salt, info: Data(info.utf8), outputByteCount: 32)
+Sources/EnsembleCore/Link/Stream.swift	let gain = reader.float(), let rate = reader.float() else { return }	let gain = reader.float() else { return }\n        let rate = reader.float() ?? Float(48_000)

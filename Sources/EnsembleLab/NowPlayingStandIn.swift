@@ -24,7 +24,7 @@ enum NowPlayingStandIn {
         func play() {
             player.scheduleBuffer(tone, at: nil, options: .loops)
             player.play()
-            info.nowPlayingInfo = [MPMediaItemPropertyTitle: "Duet test", MPMediaItemPropertyArtist: "Duet",
+            info.nowPlayingInfo = [MPMediaItemPropertyTitle: "Ensemble test", MPMediaItemPropertyArtist: "Ensemble",
                                    MPNowPlayingInfoPropertyPlaybackRate: 1.0, MPMediaItemPropertyPlaybackDuration: 120.0,
                                    MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0]
             info.playbackState = .playing

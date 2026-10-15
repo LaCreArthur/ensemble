@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import DuetCore
+@testable import EnsembleCore
 
 /// Playing a sound for an output that runs on its own clock: it must play the position the caller
 /// asks for, slide into place slowly enough that no pitch change is heard, and jump only when the

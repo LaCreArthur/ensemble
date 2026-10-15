@@ -16,7 +16,7 @@ AirPods and other Bluetooth speakers, USB and HDMI audio.
 Use the [bug report](../../issues/new?template=bug_report.yml). The app's log helps most:
 
 ```sh
-/usr/bin/log show --last 10m --predicate 'subsystem == "com.lacrearthur.duet"' > ensemble.log
+/usr/bin/log show --last 10m --predicate 'subsystem == "com.lacrearthur.ensemble"' > ensemble.log
 ```
 
 ## Change the code
@@ -27,14 +27,11 @@ Use the [bug report](../../issues/new?template=bug_report.yml). The app's log he
 
    ```sh
    swift build                     # app and tools
-   DUET_IDENTITY="Apple Development: Your Name (TEAMID)" scripts/build-app.sh   # signed app in /Applications
+   ENSEMBLE_IDENTITY="Apple Development: Your Name (TEAMID)" scripts/build-app.sh   # signed app in /Applications
    ```
 
-3. Measure what you changed. `swift run duet-lab` holds the tools used to tune the sync (delay of each
+3. Measure what you changed. `swift run ensemble-lab` holds the tools used to tune the sync (delay of each
    output, capture path, first frame after silence). Put the numbers before and after in the pull request.
 4. Match the code around you: plain Swift, no new dependencies, comments that say why.
 
 Ideas that need a hand are labeled [help wanted](../../labels/help%20wanted).
-
-Ids in the code still say "duet" (bundle id, Bonjour types, Keychain item): they keep existing pairings
-and permissions working, so they stay.

@@ -1,6 +1,6 @@
 import AppKit
 import CoreAudio
-import DuetCore
+import EnsembleCore
 import MediaPlayer
 import Observation
 import ServiceManagement
@@ -9,9 +9,9 @@ import os
 
 /// The app's state, and the rules that run the audio engine and the link to the other Mac.
 ///
-/// Rules: Duet runs on both Macs. The Mac where Duet is on shares its sound: every app's sound plays
+/// Rules: Ensemble runs on both Macs. The Mac where Ensemble is on shares its sound: every app's sound plays
 /// on its ticked outputs and on the other Mac, all heard together; the other Mac plays along unless
-/// its output is headphones. Turning Duet on on one Mac turns it off on the other (the later switch
+/// its output is headphones. Turning Ensemble on on one Mac turns it off on the other (the later switch
 /// wins). Music or a video that starts on the other Mac does the same there, and pauses
 /// this Mac's music: the newest one wins, as AirPods move to the device that starts playing.
 /// While one Mac plays the other's sound, both Macs have one volume: the volume keys, Control
@@ -20,13 +20,14 @@ import os
 /// Bluetooth output puts a Mac on standby (headphones: private listening) unless it is ticked as a
 /// speaker. The slowest ticked output sets the delay, and a paired Mac always leaves room in it for
 /// the other Mac, so the delay does not change when the other Mac comes or goes. While a Mac shares,
-/// apps play to Ensemble's sound device when it is installed: it reports the delay as its latency,
-/// so video waits for the sound; the app installs that device when the user asks. The microphone tune on either Mac aligns its outputs, then the other
-/// Mac, as heard there. While a Mac shares, its capture and main output run all the time, without
+/// apps play to Ensemble's sound device and Ensemble reads their sound back from it; the device reports
+/// the delay as its latency, so video waits for the sound. Sharing needs the device: the app installs it
+/// when the user asks. The microphone tune on either Mac aligns its outputs, then the other Mac, as
+/// heard there. While a Mac shares, its capture and main output run all the time, without
 /// keeping the Mac awake (the apps that play do), so the start of a sound is never lost; its other
 /// outputs and the stream to the other Mac start with the sound and stop 5 minutes after it.
 @MainActor @Observable
-final class Duet {
+final class Ensemble {
     // MARK: Remembered settings
 
     var isOn: Bool {
@@ -35,12 +36,12 @@ final class Duet {
             since = Date().timeIntervalSince1970
             store.set(isOn, forKey: "on")
             if isOn, let main = outputs.first(where: \.isBuiltIn), OutputDevice.defaultOutput() != main {
-                try? OutputDevice.setDefaultOutput(main)   // a click on Duet means "play on the speakers"
+                try? OutputDevice.setDefaultOutput(main)   // a click on Ensemble means "play on the speakers"
             }
             update()
         }
     }
-    /// When Duet was last turned on or off here (seconds since 1970): between the two Macs, the later switch wins.
+    /// When Ensemble was last turned on or off here (seconds since 1970): between the two Macs, the later switch wins.
     private var since: Double { didSet { store.set(since, forKey: "since") } }
     /// Ticked outputs of this Mac (device UIDs).
     var chosenOutputs: Set<String> { didSet { store.set(Array(chosenOutputs), forKey: "outputs"); update() } }
@@ -144,7 +145,7 @@ final class Duet {
     private var remoteCommands: [(MPRemoteCommand, Any)] = []
     /// The volume both Macs last agreed on while this Mac plays the other's sound.
     private var sharedVolume: (volume: Double, muted: Bool)?
-    private let log = Logger(subsystem: "com.lacrearthur.duet", category: "audio")
+    private let log = Logger(subsystem: "com.lacrearthur.ensemble", category: "audio")
     /// Logs the stream's health while this Mac plays the other Mac's sound.
     private var healthTimer: Timer?
     /// Ends the pause of this Mac's music if the other Mac's tune never says it is done.
@@ -532,10 +533,10 @@ final class Duet {
         }
     }
 
-    /// While this Mac plays the other Mac's sound, Duet is its now-playing app: the media keys and
+    /// While this Mac plays the other Mac's sound, Ensemble is its now-playing app: the media keys and
     /// Control Center control the music on the other Mac. Not while a command to this Mac's own music
     /// is on its way: the system gives it to the now-playing app of the moment, and the pause that comes
-    /// with the other Mac taking sharing would reach Duet and pause the other Mac's music instead.
+    /// with the other Mac taking sharing would reach Ensemble and pause the other Mac's music instead.
     private func updateNowPlaying() {
         let center = MPNowPlayingInfoCenter.default()
         guard isReceiving, delivering == 0, let name = link.session?.peer.name else {

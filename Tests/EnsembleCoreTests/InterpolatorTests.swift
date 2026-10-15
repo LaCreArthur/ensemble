@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import DuetCore
+@testable import EnsembleCore
 
 /// Reading the sound between its samples, which is how an output on its own clock plays the same
 /// sound a little faster or slower without the pitch changing or the level moving.

@@ -1,9 +1,9 @@
 import Testing
-@testable import DuetCore
+@testable import EnsembleCore
 
 /// Each test feeds a sequence of Now Playing states and expects which of them are starts.
 struct MediaStartTests {
-    let own = "com.lacrearthur.duet"
+    let own = "com.lacrearthur.ensemble"
 
     func starts(_ states: [(Bool, String?)]) -> [Bool] {
         var d = MediaStart(own: own)

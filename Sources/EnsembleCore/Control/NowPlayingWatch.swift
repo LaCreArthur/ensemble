@@ -73,7 +73,7 @@ public final class NowPlayingWatch: @unchecked Sendable {
         process.standardInput = Pipe()
         process.terminationHandler = { [weak self] process in
             guard self?.stopped == false else { return }
-            Logger(subsystem: "com.lacrearthur.duet", category: "audio")
+            Logger(subsystem: "com.lacrearthur.ensemble", category: "audio")
                 .error("Now Playing watch ended (status \(process.terminationStatus)): takeover and the playing state are off")
         }
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in

@@ -3,7 +3,7 @@
 Ensemble plays a Mac's sound on several speakers and on a second Mac so that you hear one sound, not
 an echo, and so that video still matches it. This is what we tried, what we kept, and the numbers
 behind each choice. All numbers were measured on two MacBook Pros, a Bluetooth speaker (Tribit) and an
-LG display, with the tools in `Sources/DuetLab` (`swift run duet-lab`).
+LG display, with the tools in `Sources/EnsembleLab` (`swift run ensemble-lab`).
 
 ## Results
 

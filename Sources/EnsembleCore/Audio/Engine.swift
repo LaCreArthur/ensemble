@@ -82,7 +82,7 @@ public final class Engine: @unchecked Sendable {
     /// then out); at 32 frames the timing wandered and Core Audio reported overloads (2026-10-15).
     static let cycleFrames: UInt32 = 128
     /// Seconds from an app handing its sound to Ensemble's device to that sound entering the timeline, as
-    /// `duet-lab device-path` measures it (8.5 ms on a MacBook Pro, the same with apps playing 128 or 512
+    /// `ensemble-lab device-path` measures it (8.5 ms on a MacBook Pro, the same with apps playing 128 or 512
     /// frames per cycle; a process tap took 69 ms). Part of the latency Ensemble's sound device reports.
     public static let capturePath = 0.0085
 
@@ -112,8 +112,8 @@ public final class Engine: @unchecked Sendable {
         try? CA.setScalar(CA.system, kAudioHardwarePropertySleepingIsAllowed, UInt32(receiver == nil ? 1 : 0))
         let main = outputs[0].device
         let description: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "Duet",
-            kAudioAggregateDeviceUIDKey: "duet.aggregate.\(UUID().uuidString)",
+            kAudioAggregateDeviceNameKey: "Ensemble",
+            kAudioAggregateDeviceUIDKey: "ensemble.aggregate.\(UUID().uuidString)",
             kAudioAggregateDeviceMainSubDeviceKey: main.uid,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,

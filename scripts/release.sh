@@ -6,8 +6,8 @@
 # Publish: gh release create v<version> build/Ensemble.dmg
 set -e
 cd "$(dirname "$0")/.."
-DUET_IDENTITY="${DUET_IDENTITY:-Developer ID Application: Arthur Scheidel (P39D6865YD)}"
-DUET_IDENTITY="$DUET_IDENTITY" scripts/build-app.sh --no-install
+ENSEMBLE_IDENTITY="${ENSEMBLE_IDENTITY:-Developer ID Application: Arthur Scheidel (P39D6865YD)}"
+ENSEMBLE_IDENTITY="$ENSEMBLE_IDENTITY" scripts/build-app.sh --no-install
 dmg=build/Ensemble.dmg
 stage=build/dmg
 rm -rf "$stage" "$dmg"
@@ -16,7 +16,7 @@ cp -R build/Ensemble.app "$stage/"
 ln -s /Applications "$stage/Applications"
 hdiutil create -volname Ensemble -srcfolder "$stage" -format UDZO -fs APFS "$dmg"
 rm -rf "$stage"
-codesign --sign "$DUET_IDENTITY" --timestamp "$dmg"
+codesign --sign "$ENSEMBLE_IDENTITY" --timestamp "$dmg"
 xcrun notarytool submit "$dmg" --keychain-profile ensemble --wait
 xcrun stapler staple "$dmg"
 spctl --assess --type open --context context:primary-signature --verbose "$dmg"

@@ -4,7 +4,7 @@ import Network
 import dnssd
 import os
 
-/// The control link to the other Mac running Duet. It finds the other Mac on the local network
+/// The control link to the other Mac running Ensemble. It finds the other Mac on the local network
 /// (Bonjour), pairs with it once, and then keeps an encrypted session with it: small JSON messages
 /// over TCP, plus the keys of the sound stream (UDP). One paired Mac at a time. Main queue only.
 ///
@@ -47,7 +47,7 @@ public final class Link {
 
     public let me: Peer
     public private(set) var pairing: Pairing?
-    /// Duets on the network now, apart from this one.
+    /// Macs running Ensemble on the network now, apart from this one.
     public private(set) var nearby: [Peer] = []
     public private(set) var session: Session?
     /// What the pairing or the connection does now, for the menu (nil: nothing to say).
@@ -56,7 +56,7 @@ public final class Link {
     public private(set) var refused = false
     /// The user did not allow this app on the local network (Privacy & Security), so it finds no Mac.
     public private(set) var denied = false
-    /// Duets on the network to offer pairing with: all but the paired one, unless it refused.
+    /// Macs running Ensemble on the network to offer pairing with: all but the paired one, unless it refused.
     public var pairable: [Peer] {
         channels.contains { $0.exchange != nil } ? [] : nearby.filter { $0.id != pairing?.peer.id || refused }
     }
@@ -69,7 +69,7 @@ public final class Link {
     /// Asks the user to compare `code` with the one the other Mac shows; `reply` once answered.
     public var confirm: (_ peer: Peer, _ code: String, _ reply: @escaping (Bool) -> Void) -> Void = { _, _, reply in reply(false) }
 
-    private static let type = "_duet._tcp"
+    private static let type = "_ensemble._tcp"
     /// How long the Macs try the network alone before they also use the direct link, and how long they then look.
     private static let directAfter: TimeInterval = 10, directFor: TimeInterval = 600
     private var listener: NWListener?
@@ -82,7 +82,7 @@ public final class Link {
     private var direct = false
     /// Since when this Mac looks for the other one (start, wake, end of a session).
     private var lookingSince = Date()
-    private let log = Logger(subsystem: "com.lacrearthur.duet", category: "link")
+    private let log = Logger(subsystem: "com.lacrearthur.ensemble", category: "link")
 
     public init(me: Peer, pairing: Pairing?) {
         self.me = me
@@ -109,7 +109,7 @@ public final class Link {
         updateDirect()
     }
 
-    /// Starts pairing with a Duet found on the network; both Macs then ask their user to confirm.
+    /// Starts pairing with a Mac running Ensemble found on the network; both Macs then ask their user to confirm.
     public func pair(with peer: Peer) {
         guard let endpoint = endpoints[peer.id], !channels.contains(where: { $0.exchange != nil }) else { return }
         let channel = Channel(NWConnection(to: endpoint, using: Self.parameters(direct: direct)), initiator: true)
@@ -306,10 +306,10 @@ public final class Link {
         // A session counts as direct only if both Macs were looking over the direct link when it started.
         channel.direct = channel.direct && message["d"] as? Bool == true
         let (out, back) = channel.initiator ? ("I>R", "R>I") : ("R>I", "I>R")
-        channel.seal(send: Seal.derive(pairing.key, salt: salt, "duet tcp " + out),
-                     receive: Seal.derive(pairing.key, salt: salt, "duet tcp " + back))
-        channel.udp = DatagramCrypto(send: Seal.derive(pairing.key, salt: salt, "duet udp " + out),
-                                     receive: Seal.derive(pairing.key, salt: salt, "duet udp " + back))
+        channel.seal(send: Seal.derive(pairing.key, salt: salt, "ensemble tcp " + out),
+                     receive: Seal.derive(pairing.key, salt: salt, "ensemble tcp " + back))
+        channel.udp = DatagramCrypto(send: Seal.derive(pairing.key, salt: salt, "ensemble udp " + out),
+                                     receive: Seal.derive(pairing.key, salt: salt, "ensemble udp " + back))
         channel.send(["t": "ready"])
     }
 
@@ -377,7 +377,7 @@ public final class Link {
               let shared = try? x.key.sharedSecretFromKeyAgreement(with: theirs) else { return channel.close() }
         let (keyI, keyR) = channel.initiator ? (x.publicKey, x.theirKey) : (x.theirKey, x.publicKey)
         let (nonceI, nonceR) = channel.initiator ? (x.nonce, x.theirNonce) : (x.theirNonce, x.nonce)
-        x.secret = shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: nonceI + nonceR, sharedInfo: Data("duet pair".utf8), outputByteCount: 32)
+        x.secret = shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: nonceI + nonceR, sharedInfo: Data("ensemble pair".utf8), outputByteCount: 32)
         let digest = sha256(keyI + keyR + nonceI + nonceR)
         let number = digest.prefix(4).reduce(UInt32(0)) { $0 << 8 | UInt32($1) } % 1_000_000
         let code = String(format: "%03d %03d", number / 1000, number % 1000)
@@ -409,7 +409,7 @@ public final class Link {
     }
 
     private func confirmation(_ secret: SymmetricKey, role: String) -> [UInt8] {
-        [UInt8](HMAC<SHA256>.authenticationCode(for: Data("duet pair ok \(role)".utf8), using: secret))
+        [UInt8](HMAC<SHA256>.authenticationCode(for: Data("ensemble pair ok \(role)".utf8), using: secret))
     }
 }
 

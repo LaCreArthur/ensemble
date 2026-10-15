@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 import Testing
-@testable import DuetCore
+@testable import EnsembleCore
 
 /// Receiving the other Mac's sound: packets arrive twice over two routes, out of order, late or not
 /// at all, and what must come out is the sender's sound, in order, at the moment the sender says.
@@ -17,8 +17,8 @@ struct StreamTests {
 
     init() {
         let secret = SymmetricKey(data: Data(repeating: 3, count: 32))
-        let key = Seal.derive(secret, salt: [1, 2, 3], "duet udp I>R")
-        receiver = StreamReceiver(crypto: DatagramCrypto(send: key, receive: key), name: "duet-test")
+        let key = Seal.derive(secret, salt: [1, 2, 3], "ensemble udp I>R")
+        receiver = StreamReceiver(crypto: DatagramCrypto(send: key, receive: key), name: "ensemble-test")
         receiver.prepare(outputRate: rate, sourceRate: rate)
     }
 

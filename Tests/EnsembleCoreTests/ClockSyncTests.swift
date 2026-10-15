@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import DuetCore
+@testable import EnsembleCore
 
 /// Learning the other Mac's clock from request and answer times: the whole sync rests on it, so a
 /// wrong offset means the two Macs play the same sound at different moments.

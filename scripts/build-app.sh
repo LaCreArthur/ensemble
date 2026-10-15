@@ -1,12 +1,12 @@
 #!/bin/sh
 # Builds Ensemble.app (release, Apple silicon and Intel) with its sound device inside, signs it with
-# DUET_IDENTITY (default: Arthur's development certificate), and installs it in /Applications.
+# ENSEMBLE_IDENTITY (default: Arthur's development certificate), and installs it in /Applications.
 # Usage: scripts/build-app.sh [--no-install]
 set -e
 cd "$(dirname "$0")/.."
-identity="${DUET_IDENTITY:-Apple Development: Arthur Scheidel (H7455J5457)}"
+identity="${ENSEMBLE_IDENTITY:-Apple Development: Arthur Scheidel (H7455J5457)}"
 swift build -c release --product Ensemble --arch arm64 --arch x86_64
-DUET_IDENTITY="$identity" scripts/build-driver.sh
+ENSEMBLE_IDENTITY="$identity" scripts/build-driver.sh
 app=build/Ensemble.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"

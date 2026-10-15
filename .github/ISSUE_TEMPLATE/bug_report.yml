@@ -23,4 +23,4 @@ body:
     id: log
     attributes:
       label: Log
-      description: "Run `/usr/bin/log show --last 10m --predicate 'subsystem == \"com.lacrearthur.duet\"' > ensemble.log` right after the problem and attach the file."
+      description: "Run `/usr/bin/log show --last 10m --predicate 'subsystem == \"com.lacrearthur.ensemble\"' > ensemble.log` right after the problem and attach the file."

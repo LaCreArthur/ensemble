@@ -78,7 +78,7 @@ public final class AcousticProbe: @unchecked Sendable {
         return recording
     }
 
-    // MARK: Click playback on a single device (no Duet in the path)
+    // MARK: Click playback on a single device (no Ensemble in the path)
 
     /// Plays clicks at the given host times (seconds) on an output device, blocking until done.
     /// Returns the host times at which each click actually left the speaker (latency-corrected).

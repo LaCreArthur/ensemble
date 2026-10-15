@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """Two-Mac test of the takeover (the newest sound wins and pauses the other Mac), with stand-in music
-apps that cannot be heard (duet-lab nowplaying: 30 Hz at -60 dBFS; a pause leaves the output open with
-zeros, as browsers do), and a non-media tone played with afplay. Needs Ensemble running and connected on both Macs, `ssh macb`, and duet-lab
-at /tmp/duet-lab on Mac B. Checks each Mac's log and the stand-ins' received commands; exits 1 on any failure."""
+apps that cannot be heard (ensemble-lab nowplaying: 30 Hz at -60 dBFS; a pause leaves the output open with
+zeros, as browsers do), and a non-media tone played with afplay. Needs Ensemble running and connected on both Macs, `ssh macb`, and ensemble-lab
+at /tmp/ensemble-lab on Mac B. Checks each Mac's log and the stand-ins' received commands; exits 1 on any failure."""
 import subprocess, time, sys, datetime
-LAB = subprocess.run(['swift', 'build', '--product', 'duet-lab', '--show-bin-path'], capture_output=True, text=True).stdout.strip() + '/duet-lab'
+LAB = subprocess.run(['swift', 'build', '--product', 'ensemble-lab', '--show-bin-path'], capture_output=True, text=True).stdout.strip() + '/ensemble-lab'
 B = ['ssh', '-o', 'BatchMode=yes', 'macb']
 fails = 0
 
 def now(): return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 def log(on_b, since, text):
-    cmd = f"/usr/bin/log show --start '{since}' --style compact --predicate 'subsystem == \"com.lacrearthur.duet\" AND eventMessage CONTAINS \"{text}\"'"
+    cmd = f"/usr/bin/log show --start '{since}' --style compact --predicate 'subsystem == \"com.lacrearthur.ensemble\" AND eventMessage CONTAINS \"{text}\"'"
     out = subprocess.run((B + [cmd]) if on_b else ['sh', '-c', cmd], capture_output=True, text=True).stdout
     return [l for l in out.splitlines() if text in l]
 def sharing(on_b):
-    cmd = 'defaults read com.lacrearthur.duet on'
+    cmd = 'defaults read com.lacrearthur.ensemble on'
     return subprocess.run((B + [cmd]) if on_b else ['sh', '-c', cmd], capture_output=True, text=True).stdout.strip() == '1'
 def check(what, ok):
     global fails
     print(('PASS ' if ok else 'FAIL ') + what, flush=True)
     fails += not ok
 def standin(on_b, name, *args):
-    cmd = f"/tmp/duet-lab nowplaying {' '.join(args)} > /tmp/{name}.log 2>&1" if on_b else f"{LAB} nowplaying {' '.join(args)} > /tmp/{name}.log 2>&1"
+    cmd = f"/tmp/ensemble-lab nowplaying {' '.join(args)} > /tmp/{name}.log 2>&1" if on_b else f"{LAB} nowplaying {' '.join(args)} > /tmp/{name}.log 2>&1"
     return subprocess.Popen((B + [cmd]) if on_b else ['sh', '-c', cmd])
 def standin_log(on_b, name):
     return subprocess.run((B if on_b else []) + ['cat', f'/tmp/{name}.log'], capture_output=True, text=True).stdout
@@ -30,7 +30,7 @@ def standin_log(on_b, name):
 NOW = "ObjC.import('Foundation'); $.NSBundle.bundleWithPath('/System/Library/PrivateFrameworks/MediaRemote.framework/').load; const R = $.NSClassFromString('MRNowPlayingRequest'); const c = R.localNowPlayingPlayerPath.client; (R.localIsPlaying ? 'playing ' : 'paused ') + (c.isNil() ? '' : c.bundleIdentifier.js)"
 for mac, on_b in [('A', False), ('B', True)]:
     state = subprocess.run((B if on_b else []) + ['osascript', '-l', 'JavaScript', '-e', f'"{NOW}"' if on_b else NOW], capture_output=True, text=True).stdout.strip()
-    if state.startswith('playing') and 'com.lacrearthur.duet' not in state: sys.exit(f'{mac}: {state}: not testing over it')
+    if state.startswith('playing') and 'com.lacrearthur.ensemble' not in state: sys.exit(f'{mac}: {state}: not testing over it')
 # S is the Mac that shares at the start, O the other one (True = Mac B).
 S = sharing(True)
 O = not S
@@ -43,13 +43,13 @@ b = standin(S, 'standin-s', '--seconds', '75', '--resume-after', '20')
 time.sleep(4)
 check('S plays its own sound without taking anything (it already shares)', log(S, t1, 'a sound started here') == [])
 def np(on_b): return subprocess.run((B if on_b else []) + ['osascript', '-l', 'JavaScript', '-e', f'"{NOW}"' if on_b else NOW], capture_output=True, text=True).stdout.strip()
-def lab(on_b, *args): return subprocess.run((B if on_b else []) + [('/tmp/duet-lab' if on_b else LAB), *args], capture_output=True, text=True).stdout
-check("O's Control Center shows S's music playing", np(O) == 'playing com.lacrearthur.duet')
-if 'duet-lab' not in np(S): sys.exit("S's now-playing app is not the stand-in: not sending it media keys")
+def lab(on_b, *args): return subprocess.run((B if on_b else []) + [('/tmp/ensemble-lab' if on_b else LAB), *args], capture_output=True, text=True).stdout
+check("O's Control Center shows S's music playing", np(O) == 'playing com.lacrearthur.ensemble')
+if 'ensemble-lab' not in np(S): sys.exit("S's now-playing app is not the stand-in: not sending it media keys")
 lab(S, 'media', 'pause'); time.sleep(1.5)
-check("S's music paused, its output still open: O shows it paused", np(O) == 'paused com.lacrearthur.duet')
+check("S's music paused, its output still open: O shows it paused", np(O) == 'paused com.lacrearthur.ensemble')
 lab(S, 'media', 'play'); time.sleep(1.5)
-check("O shows it playing again", np(O) == 'playing com.lacrearthur.duet')
+check("O shows it playing again", np(O) == 'playing com.lacrearthur.ensemble')
 t2 = now()
 a = standin(O, 'standin-o', '--seconds', '70')
 time.sleep(5)

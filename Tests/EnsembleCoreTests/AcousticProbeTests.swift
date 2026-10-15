@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import DuetCore
+@testable import EnsembleCore
 
 /// Hearing the calibration clicks back through the microphone, on a recording made here with a
 /// known delay. This is what tells each speaker how late it is, so a wrong delay misaligns them.

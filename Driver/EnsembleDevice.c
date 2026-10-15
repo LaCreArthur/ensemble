@@ -22,8 +22,8 @@
 #define CHANNELS 2
 #define ZERO_TIME_STAMP_PERIOD 16384
 #define DEVICE_NAME "Ensemble"
-#define DEVICE_UID "com.lacrearthur.duet.device"
-#define CAPTURE_UID "com.lacrearthur.duet.capture"
+#define DEVICE_UID "com.lacrearthur.ensemble.device"
+#define CAPTURE_UID "com.lacrearthur.ensemble.capture"
 #define MANUFACTURER "Ensemble"
 #define MIN_DB -64.0f
 /// The loopback holds one zero-time-stamp period: far more than an IO cycle's span from write to read.
@@ -393,8 +393,8 @@ static ULONG Release(void *d) { return gRefCount > 0 ? --gRefCount : 0; }
 
 static OSStatus Initialize(AudioServerPlugInDriverRef d, AudioServerPlugInHostRef host) {
     gHost = host;
-    gQueue = dispatch_queue_create("com.lacrearthur.duet.device", DISPATCH_QUEUE_SERIAL);
-    gLog = os_log_create("com.lacrearthur.duet", "device");
+    gQueue = dispatch_queue_create("com.lacrearthur.ensemble.device", DISPATCH_QUEUE_SERIAL);
+    gLog = os_log_create("com.lacrearthur.ensemble", "device");
     mach_timebase_info_data_t timebase;
     mach_timebase_info(&timebase);
     gHostTicksPerFrame = 1e9 * timebase.denom / timebase.numer / SAMPLE_RATE;

@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 import Testing
-@testable import DuetCore
+@testable import EnsembleCore
 
 /// The datagrams between the two Macs: what one seals the other must open, and nothing else must
 /// get through, because anything that does is played as sound or moves the clock.
@@ -11,8 +11,8 @@ struct WireTests {
 
     /// The two ends of one session, keyed the way a paired session keys them.
     func session() -> (initiator: DatagramCrypto, responder: DatagramCrypto) {
-        let out = Seal.derive(secret, salt: salt, "duet udp I>R")
-        let back = Seal.derive(secret, salt: salt, "duet udp R>I")
+        let out = Seal.derive(secret, salt: salt, "ensemble udp I>R")
+        let back = Seal.derive(secret, salt: salt, "ensemble udp R>I")
         return (DatagramCrypto(send: out, receive: back), DatagramCrypto(send: back, receive: out))
     }
 
@@ -40,8 +40,8 @@ struct WireTests {
     @Test func aPacketFromAnotherPairingIsRejected() {
         let (initiator, _) = session()
         let other = SymmetricKey(data: Data(repeating: 8, count: 32))
-        let stranger = DatagramCrypto(send: Seal.derive(other, salt: salt, "duet udp I>R"),
-                                      receive: Seal.derive(other, salt: salt, "duet udp R>I"))
+        let stranger = DatagramCrypto(send: Seal.derive(other, salt: salt, "ensemble udp I>R"),
+                                      receive: Seal.derive(other, salt: salt, "ensemble udp R>I"))
         let (_, responder) = session()
         #expect(responder.open(stranger.seal(StreamPacket.audio, payload)) == nil)
         #expect(initiator.open(stranger.seal(StreamPacket.clockAnswer, payload)) == nil)

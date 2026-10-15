@@ -7,7 +7,7 @@
 	<key>CFBundleExecutable</key>
 	<string>EnsembleDevice</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.lacrearthur.duet.device</string>
+	<string>com.lacrearthur.ensemble.device</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -17,7 +17,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>4</string>
+	<string>5</string>
 	<key>CFPlugInFactories</key>
 	<dict>
 		<key>68457B80-DEB1-49CD-B44F-7F2602BDB418</key>

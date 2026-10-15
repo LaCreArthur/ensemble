@@ -1,5 +1,5 @@
 import Testing
-@testable import DuetCore
+@testable import EnsembleCore
 
 /// The ring the captured sound passes through: every output and the other Mac's stream read from it,
 /// so a frame must come back exactly as captured, past the ring's end, or not at all.

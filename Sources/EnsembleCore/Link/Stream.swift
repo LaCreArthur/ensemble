@@ -21,7 +21,7 @@ enum StreamPacket {
     /// (a float stream may exceed 1) survive; the receiver doubles it back.
     static let headroom: Float = 2
     /// Bonjour type of the sender's stream; the receiver finds it on every route.
-    static let service = "_duet._udp"
+    static let service = "_ensemble._udp"
 
     /// UDP in the voice class (Wi-Fi's low-latency queue), direct Mac-to-Mac link allowed, kernel receive times.
     static func parameters() -> NWParameters {
@@ -49,13 +49,13 @@ public final class StreamSender: @unchecked Sendable {
     public let gain = AtomicFloat(1)
     public let streamID = UInt32.random(in: 1...UInt32.max)
     /// The stream's Bonjour name, which the receiver looks for.
-    public var name: String { "duet-" + String(streamID, radix: 16) }
+    public var name: String { "ensemble-" + String(streamID, radix: 16) }
 
     /// The session keys it sends with.
     public let crypto: DatagramCrypto
     private let engine: Engine
     private let listener: NWListener
-    private let queue = DispatchQueue(label: "duet.stream.sender", qos: .userInteractive)
+    private let queue = DispatchQueue(label: "ensemble.stream.sender", qos: .userInteractive)
     private let running = Atomic<Bool>(true)
     private let lock = NSLock()
     /// Routes to the receiver, with the host time of their latest clock request.
@@ -80,7 +80,7 @@ public final class StreamSender: @unchecked Sendable {
         listener.start(queue: queue)
         let send = Thread { [self] in sendLoop() }
         send.qualityOfService = .userInteractive
-        send.name = "duet.stream.send"
+        send.name = "ensemble.stream.send"
         send.start()
     }
 
@@ -224,7 +224,7 @@ public final class StreamReceiver: @unchecked Sendable {
     private let mapping = SeqLock<Mapping?>(nil)
 
     // Network queue only.
-    private let queue = DispatchQueue(label: "duet.stream.receiver", qos: .userInteractive)
+    private let queue = DispatchQueue(label: "ensemble.stream.receiver", qos: .userInteractive)
     private var browser: NWBrowser?
     private var timer: DispatchSourceTimer?
     /// The sender as Bonjour found it, and one flow to it per network interface it was found on.

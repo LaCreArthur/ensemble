@@ -1,9 +1,9 @@
 import CoreAudio
 import CryptoKit
-@testable import DuetCore
+@testable import EnsembleCore
 import Foundation
 
-// Development and measurement tool for Duet. Not shipped in the app.
+// Development and measurement tool for Ensemble. Not shipped in the app.
 setvbuf(stdout, nil, _IOLBF, 0)
 
 let args = Array(CommandLine.arguments.dropFirst())
@@ -168,7 +168,7 @@ case "nowplaying":
     NowPlayingStandIn.run(seconds: Double(option("seconds") ?? "12")!, resumeAfter: option("resume-after").flatMap(Double.init))
 
 default:
-    print("usage: duet-lab devices | audio-processes | calibrate | follow | device-path | monitor | media CMD | nowplaying")
+    print("usage: ensemble-lab devices | audio-processes | calibrate | follow | device-path | monitor | media CMD | nowplaying")
 }
 
 /// Frame indices of click onsets in a captured stream (strongest matched-filter peaks, 0.2 s apart).
