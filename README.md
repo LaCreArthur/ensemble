@@ -23,6 +23,7 @@
 - **Video stays lip-synced**, even with Bluetooth speakers.
 - **Your other Mac plays along**, at the same moment, with its media keys.
 - **One volume**: the keys on either Mac move every speaker.
+- **The newest sound wins**: play music on one Mac and the other pauses its own, like AirPods.
 - **0.16 s** from app to every speaker (AirPlay: about 2 s). Both Macs within 2 ms. [How](docs/DESIGN.md)
 - **Free, open source**, notarized.
 
@@ -48,8 +49,8 @@
 
 ## Privacy
 
-Sound goes only to the Mac you paired, on your network, encrypted. The microphone is used only to
-tune. Once a day the app checks GitHub for a new version. Nothing else leaves your Mac.
+Sound goes only to the Mac you paired, on your network, encrypted. Ensemble reads your apps' sound
+from its own sound device, and listens with the microphone only to tune. Once a day the app checks GitHub for a new version. Nothing else leaves your Mac.
 
 ## Uninstall
 
