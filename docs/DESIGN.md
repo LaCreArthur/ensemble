@@ -64,7 +64,7 @@ The budget stays even while the other Mac sleeps, so the delay never jumps when 
 
 Each Mac's speakers have their own hidden delay, so Ensemble measures what you hear: one microphone, on
 the Mac where you click, times both Macs as heard there (as Apple TV's audio sync does with an iPhone).
-The other Mac needs no microphone permission. Residual error after a tune: 0.5 to 0.6 ms; a 20 ms offset
+The tune uses the microphone only on the Mac where you click. Residual error after a tune: 0.5 to 0.6 ms; a 20 ms offset
 set on purpose was measured as 19.9 ms. Moving the microphone 35 cm changes the answer by about 2 ms,
 which is the speed of sound, so the last tune sets where the two Macs align.
 
@@ -77,8 +77,22 @@ capture path included (8.5 ms measured), as its latency. Players then wait for t
 video stayed lip-synced with the Bluetooth speaker ticked. The device exists only while
 Ensemble asks for it and goes when Ensemble quits.
 
+## 6. Which Mac shares: the newest music, not any sound
+
+Like AirPods, the Mac where music or a video starts takes over, and the other Mac pauses its own. Our
+first signal was "an app is playing sound" from Core Audio, but a paused browser tab keeps its output
+open and plays silence, so two Macs paused each other. A level meter on the sound fixed that, but it
+waited 2 s and needed a recording permission. What we kept: macOS's Now Playing, the same state
+Control Center shows. A notification sound or a game is not media, so it does not take over. Since
+macOS 15.4 only Apple-signed programs may read Now Playing, so Ensemble reads it through a small
+script run by macOS's own `osascript`. The pause is sent with a reply: a command sent without one
+reached whichever app was now playing when it arrived, about 350 ms later, which was sometimes
+Ensemble itself.
+
 ## Not done, and why
 
-- Adaptive delay (shrink the budget when Wi-Fi is calm): kept simple for now; the fixed budget works.
+- Adaptive delay (shrink the 0.15 s budget when Wi-Fi is calm): the worst lateness we logged in 45
+  minutes was 78 ms, but Universal Control stalls reach 150 ms. A day of logs decides whether it is
+  worth a rare cut-out.
 - AirPlay speakers as outputs: their 2 s buffer would hold every other speaker and the video back.
   Ideas welcome in the issues.
