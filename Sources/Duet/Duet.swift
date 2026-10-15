@@ -12,7 +12,8 @@ import os
 /// Rules: Duet runs on both Macs. The Mac where Duet is on shares its sound: every app's sound plays
 /// on its ticked outputs and on the other Mac, all heard together; the other Mac plays along unless
 /// its output is headphones. Turning Duet on on one Mac turns it off on the other (the later switch
-/// wins). While one Mac plays the other's sound, both Macs have one volume: the volume keys, Control
+/// wins). A sound that starts on the other Mac and lasts 2 s does the same there, and pauses this Mac's
+/// music: the newest sound wins, as AirPods move to the device that starts playing. While one Mac plays the other's sound, both Macs have one volume: the volume keys, Control
 /// Center or the menu on either Mac set it, mute included; each output also has its own share of it,
 /// set on its Mac. The other Mac's menu and media keys control the music: play/pause, tracks. A
 /// Bluetooth output puts a Mac on standby (headphones: private listening) unless it is ticked as a
@@ -114,6 +115,8 @@ final class Duet {
     private let monitor = PlaybackMonitor(excluding: [getpid()])
     /// Keeps the capture running for a while after the last app stops, so pauses do not restart it.
     private var hold: Timer?
+    /// Turns Duet on here when a sound that starts while the other Mac shares lasts long enough (not an alert).
+    private var takeover: Timer?
     private var engine: Engine?
     private var sender: StreamSender?
     private var receiver: StreamReceiver?
@@ -261,7 +264,7 @@ final class Duet {
         let localLead = main.flatMap { main in devices.map { Engine.lead(of: $0, lag: lag($0), main: main) }.max() } ?? 0
         let delay = link.pairing != nil ? max(localLead, Self.networkDelay + peerLead) : localLead
         let system = OutputDevice.defaultOutput()
-        let headphones = system.flatMap { $0.isBluetooth && !chosenOutputs.contains($0.uid) ? $0 : nil }
+        let headphones = self.headphones
         let sharing = isOn && !devices.isEmpty
         if !sharing, EnsembleDevice.isSystemOutput, let main { try? OutputDevice.setDefaultOutput(main) }   // before the device goes
         EnsembleDevice.setLatency(sharing ? Self.capturePath + delay + (main?.outputLatency ?? 0) + trim : nil)
@@ -339,6 +342,11 @@ final class Duet {
         if peer.on { return "\(name) shares its sound." }
         if isOn { return peer.canPlay ? "\(name) plays along." : "\(name) is on headphones." }
         return "\(name) is ready."
+    }
+
+    /// The system output when it is a Bluetooth device not ticked as a speaker: headphones, private listening.
+    private var headphones: OutputDevice? {
+        OutputDevice.defaultOutput().flatMap { $0.isBluetooth && !chosenOutputs.contains($0.uid) ? $0 : nil }
     }
 
     /// Seconds an output is heard after the latency its device reports, as the tune measured.
@@ -419,11 +427,25 @@ final class Duet {
     }
 
     private func appsPlayingChanged() {
+        takeover?.invalidate()
+        takeover = monitor.isPlaying && !isOn && peer?.on == true ? Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.takeOver() }
+        } : nil
         hold?.invalidate()
         hold = monitor.isPlaying || engine == nil ? nil : Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.hold = nil; self?.update() }
         }
         update()
+    }
+
+    /// A sound started here while the other Mac shares: this Mac shares instead, and the other Mac's
+    /// music pauses (sent before the switch, while the other Mac still shares and obeys media commands).
+    private func takeOver() {
+        takeover = nil
+        guard monitor.isPlaying, !isOn, let peer, peer.on, headphones == nil else { return }
+        if peer.playing { control(.pause) }
+        log.notice("a sound started here: this Mac shares now")
+        isOn = true
     }
 
     // MARK: The other Mac
