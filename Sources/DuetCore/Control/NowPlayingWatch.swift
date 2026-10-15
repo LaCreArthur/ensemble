@@ -26,30 +26,35 @@ public struct MediaStart {
     }
 }
 
-/// Calls `onStart` on the main queue when an app other than this one starts playing on this Mac.
+/// Reports the Now Playing state on the main queue: once at start, then on each change.
 /// Since macOS 15.4 the system tells only its own programs what plays, so the built-in script runner
-/// reads it and prints one line per change; if a macOS update closes that, the watch tells nothing.
+/// reads it, on the system's change notices, and prints one line per change; if a macOS update closes
+/// that, the script ends and the watch reports nothing more.
 public final class NowPlayingWatch: @unchecked Sendable {
     private static let script = """
+        ObjC.import('Foundation');
         function run() {
           $.NSBundle.bundleWithPath('/System/Library/PrivateFrameworks/MediaRemote.framework/').load;
+          ObjC.bindFunction('MRMediaRemoteRegisterForNowPlayingNotifications', ['void', ['id']]);
           const R = $.NSClassFromString('MRNowPlayingRequest');
           const out = $.NSFileHandle.fileHandleWithStandardOutput;
           let last = null;
-          for (;;) {
+          const report = () => {
             const client = R.localNowPlayingPlayerPath.client;
             const line = JSON.stringify({ playing: !!R.localIsPlaying, app: client.isNil() ? null : client.bundleIdentifier.js });
             if (line !== last) { out.writeData($(line + '\\n').dataUsingEncoding($.NSUTF8StringEncoding)); last = line; }
-            delay(0.25);
-          }
+          };
+          $.MRMediaRemoteRegisterForNowPlayingNotifications($.NSOperationQueue.mainQueue.underlyingQueue);
+          for (const name of ['kMRMediaRemoteNowPlayingApplicationIsPlayingDidChangeNotification', 'kMRMediaRemoteNowPlayingApplicationDidChangeNotification'])
+            $.NSNotificationCenter.defaultCenter.addObserverForNameObjectQueueUsingBlock(name, $(), $.NSOperationQueue.mainQueue, report);
+          report();
+          for (;;) $.NSRunLoop.currentRunLoop.runModeBeforeDate($.NSDefaultRunLoopMode, $.NSDate.distantFuture);
         }
         """
     private let process = Process()
-    private var start: MediaStart
     private var buffer = Data()
 
-    public init(onStart: @escaping @Sendable () -> Void) {
-        start = MediaStart(own: Bundle.main.bundleIdentifier)
+    public init(onChange: @escaping @Sendable (NowPlaying) -> Void) {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = ["-l", "JavaScript", "-e", Self.script]
         let pipe = Pipe()
@@ -57,7 +62,7 @@ public final class NowPlayingWatch: @unchecked Sendable {
         process.standardError = FileHandle.nullDevice
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            DispatchQueue.main.async { if self?.read(data) == true { onStart() } }
+            DispatchQueue.main.async { self?.read(data).forEach(onChange) }
         }
     }
 
@@ -67,15 +72,14 @@ public final class NowPlayingWatch: @unchecked Sendable {
 
     public func stop() { if process.isRunning { process.terminate() } }
 
-    /// Takes the script's output; true when a line in it is a start.
-    private func read(_ data: Data) -> Bool {
+    /// Takes the script's output; returns the states in it.
+    private func read(_ data: Data) -> [NowPlaying] {
         buffer.append(data)
-        var started = false
+        var states: [NowPlaying] = []
         while let end = buffer.firstIndex(of: 0x0A) {
-            let line = buffer[buffer.startIndex..<end]
+            if let state = try? JSONDecoder().decode(NowPlaying.self, from: buffer[buffer.startIndex..<end]) { states.append(state) }
             buffer.removeSubrange(...end)
-            if let now = try? JSONDecoder().decode(NowPlaying.self, from: line), start.feed(now) { started = true }
         }
-        return started
+        return states
     }
 }

@@ -117,7 +117,13 @@ final class Duet {
     /// Keeps the capture running for a while after the last app stops, so pauses do not restart it.
     private var hold: Timer?
     /// While the other Mac shares and an app here has its output open, listens for that app's sound, to share it instead.
+    /// This Mac's Now Playing, watched while the other Mac is connected: it tells the other Mac whether
+    /// music plays here, and music or a video that starts here takes sharing over.
     private var watch: NowPlayingWatch?
+    private var media = NowPlaying(playing: false, app: nil)
+    private var mediaStart = MediaStart(own: Bundle.main.bundleIdentifier)
+    /// Music or a video plays here (Ensemble itself, playing the other Mac's sound, does not count).
+    private var mediaPlays: Bool { media.playing && media.app != mediaStart.own }
     /// Media commands sent to this Mac's music app and not yet received by it.
     private var delivering = 0
     private var engine: Engine?
@@ -306,7 +312,7 @@ final class Duet {
             activity = isPlaying ? ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical], reason: "Playing sound") : nil
         }
         updateSender(session: session, peerPlays: peer?.canPlay == true)
-        updateWatch(wanted: !isOn && peer?.on == true && headphones == nil)
+        updateWatch(wanted: session != nil)
 
         let peerName = session?.peer.name ?? link.pairing?.peer.name ?? "the other Mac"
         let names = ListFormatter.localizedString(byJoining: outputs.filter { chosenOutputs.contains($0.uid) }.map(\.name)
@@ -446,7 +452,8 @@ final class Duet {
             watch?.stop()
             watch = nil
         } else if watch == nil {
-            let watch = NowPlayingWatch { [weak self] in MainActor.assumeIsolated { self?.takeOver() } }
+            mediaStart = MediaStart(own: mediaStart.own)
+            let watch = NowPlayingWatch { [weak self] state in MainActor.assumeIsolated { self?.nowPlayingChanged(state) } }
             do {
                 try watch.run()
                 self.watch = watch
@@ -454,6 +461,13 @@ final class Duet {
                 log.error("cannot watch Now Playing: \(String(describing: error), privacy: .public)")
             }
         }
+    }
+
+    private func nowPlayingChanged(_ state: NowPlaying) {
+        let started = mediaStart.feed(state)
+        media = state
+        if started { takeOver() }
+        update()
     }
 
     /// Music or a video started here while the other Mac shares: this Mac shares instead, and the other
@@ -471,7 +485,7 @@ final class Duet {
     private func sendState(canPlay: Bool, lead: Double) {
         guard let session = link.session else { return sentState = nil }
         let state: [String: AnyHashable] = [
-            "t": "state", "on": isOn, "since": since, "stream": sender?.name ?? "", "playing": monitor.isPlaying,
+            "t": "state", "on": isOn, "since": since, "stream": sender?.name ?? "", "playing": mediaPlays,
             "volume": mainVolume, "muted": volumeControl?.isMuted ?? false, "canPlay": canPlay, "lead": lead, "trim": trim,
         ]
         let id = ObjectIdentifier(session.crypto)

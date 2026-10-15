@@ -180,6 +180,7 @@ public final class Engine: @unchecked Sendable {
             AudioHardwareDestroyProcessTap(tapID)
             tapID = AudioObjectID(kAudioObjectUnknown)
         }
+        try? CA.setScalar(CA.system, kAudioHardwarePropertySleepingIsAllowed, 1)
     }
 
     /// Seconds an output needs the stream before the main output plays it: it is heard `lag` after the

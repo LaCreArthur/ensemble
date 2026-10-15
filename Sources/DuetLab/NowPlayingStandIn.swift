@@ -3,8 +3,8 @@ import MediaPlayer
 
 /// Test double for a music app: plays a 30 Hz tone at -60 dBFS (a level meter hears it, laptop speakers
 /// cannot play it), publishes now-playing info and logs remote commands. A pause stops the sound but
-/// keeps the output open, playing zeros, as browsers and Electron apps do; `resumeAfter` seconds after a
-/// pause it plays again by itself, as a user pressing play.
+/// keeps the output open, playing zeros, as browsers and Electron apps do; `resumeAfter` seconds after its
+/// last pause it plays again by itself, as a user pressing play.
 enum NowPlayingStandIn {
     static func run(seconds: Double, resumeAfter: Double?) {
         let engine = AVAudioEngine()
@@ -30,11 +30,16 @@ enum NowPlayingStandIn {
             info.playbackState = .playing
             say("playing")
         }
+        var pauses = 0
         func pause() {
             player.stop()   // the engine keeps running: the output stays open with zeros
             info.playbackState = .paused
             say("paused")
-            if let resumeAfter { DispatchQueue.main.asyncAfter(deadline: .now() + resumeAfter) { play() } }
+            pauses += 1
+            let pause = pauses
+            if let resumeAfter {
+                DispatchQueue.main.asyncAfter(deadline: .now() + resumeAfter) { if pauses == pause, !player.isPlaying { play() } }
+            }
         }
         let center = MPRemoteCommandCenter.shared()
         let commands: [(String, MPRemoteCommand)] = [("play", center.playCommand), ("pause", center.pauseCommand),
