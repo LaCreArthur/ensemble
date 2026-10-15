@@ -555,7 +555,7 @@ case "media":
 
 case "nowplaying":
     // A stand-in music app: becomes the now-playing app and logs the commands it receives.
-    NowPlayingStandIn.run(seconds: Double(option("seconds") ?? "12")!)
+    NowPlayingStandIn.run(seconds: Double(option("seconds") ?? "12")!, resumeAfter: option("resume-after").flatMap(Double.init))
 
 default:
     print("usage: duet-lab devices | probe | capture-test | loop | calibrate | hold | monitor | media CMD | nowplaying")
