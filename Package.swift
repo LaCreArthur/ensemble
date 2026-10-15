@@ -18,6 +18,11 @@ let package = Package(
             dependencies: ["DuetCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        .testTarget(
+            name: "DuetCoreTests",
+            dependencies: ["DuetCore"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .executableTarget(
             name: "DuetLab",
             dependencies: ["DuetCore"],

@@ -12,8 +12,9 @@ import os
 /// Rules: Duet runs on both Macs. The Mac where Duet is on shares its sound: every app's sound plays
 /// on its ticked outputs and on the other Mac, all heard together; the other Mac plays along unless
 /// its output is headphones. Turning Duet on on one Mac turns it off on the other (the later switch
-/// wins). A sound that starts on the other Mac and lasts 2 s does the same there, and pauses this Mac's
-/// music: the newest sound wins, as AirPods move to the device that starts playing. While one Mac plays the other's sound, both Macs have one volume: the volume keys, Control
+/// wins). A sound that starts on the other Mac after silence and lasts 2 s does the same there, and
+/// pauses this Mac's music: the newest sound wins, as AirPods move to the device that starts playing.
+/// While one Mac plays the other's sound, both Macs have one volume: the volume keys, Control
 /// Center or the menu on either Mac set it, mute included; each output also has its own share of it,
 /// set on its Mac. The other Mac's menu and media keys control the music: play/pause, tracks. A
 /// Bluetooth output puts a Mac on standby (headphones: private listening) unless it is ticked as a
@@ -115,8 +116,8 @@ final class Duet {
     private let monitor = PlaybackMonitor(excluding: [getpid()])
     /// Keeps the capture running for a while after the last app stops, so pauses do not restart it.
     private var hold: Timer?
-    /// Turns Duet on here when a sound that starts while the other Mac shares lasts long enough (not an alert).
-    private var takeover: Timer?
+    /// While the other Mac shares, listens for a sound that starts here, to share it instead.
+    private var watch: LevelWatch?
     private var engine: Engine?
     private var sender: StreamSender?
     private var receiver: StreamReceiver?
@@ -197,7 +198,12 @@ final class Duet {
         observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main, using: lookAgain))
         // Sleep stops every device and a Core Audio restart deletes the capture: after either, the
         // engine starts again from scratch (it runs all day while this Mac shares).
-        let rebuild: @Sendable () -> Void = { [weak self] in MainActor.assumeIsolated { self?.restart(nil, playing: false); self?.update() } }
+        let rebuild: @Sendable () -> Void = { [weak self] in MainActor.assumeIsolated {
+            self?.watch?.stop()
+            self?.watch = nil
+            self?.restart(nil, playing: false)
+            self?.update()
+        } }
         observers.append(DeviceEvents.observeRestart(rebuild))
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in rebuild() })
         monitor.onChange = { [weak self] _ in MainActor.assumeIsolated { self?.appsPlayingChanged() } }
@@ -300,6 +306,7 @@ final class Duet {
             activity = isPlaying ? ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical], reason: "Playing sound") : nil
         }
         updateSender(session: session, peerPlays: peer?.canPlay == true)
+        updateWatch(wanted: !isOn && peer?.on == true && headphones == nil, main: main)
 
         let peerName = session?.peer.name ?? link.pairing?.peer.name ?? "the other Mac"
         let names = ListFormatter.localizedString(byJoining: outputs.filter { chosenOutputs.contains($0.uid) }.map(\.name)
@@ -427,10 +434,6 @@ final class Duet {
     }
 
     private func appsPlayingChanged() {
-        takeover?.invalidate()
-        takeover = monitor.isPlaying && !isOn && peer?.on == true ? Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.takeOver() }
-        } : nil
         hold?.invalidate()
         hold = monitor.isPlaying || engine == nil ? nil : Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.hold = nil; self?.update() }
@@ -438,11 +441,29 @@ final class Duet {
         update()
     }
 
+    private func updateWatch(wanted: Bool, main: OutputDevice?) {
+        if !wanted {
+            watch?.stop()
+            watch = nil
+        } else if watch == nil, let main {
+            let watch = LevelWatch(excluding: [getpid()], device: main) { [weak self] in
+                MainActor.assumeIsolated { self?.takeOver() }
+            }
+            do {
+                try watch.start()
+                self.watch = watch
+            } catch {
+                log.error("cannot listen: \(String(describing: error), privacy: .public)")
+            }
+        }
+        // Playing the other Mac's sound keeps this Mac awake; listening alone must not.
+        if watch != nil { LevelWatch.allowSleep(receiver == nil) }
+    }
+
     /// A sound started here while the other Mac shares: this Mac shares instead, and the other Mac's
     /// music pauses (sent before the switch, while the other Mac still shares and obeys media commands).
     private func takeOver() {
-        takeover = nil
-        guard monitor.isPlaying, !isOn, let peer, peer.on, headphones == nil else { return }
+        guard !isOn, let peer, peer.on, headphones == nil else { return }
         if peer.playing { control(.pause) }
         log.notice("a sound started here: this Mac shares now")
         isOn = true
