@@ -36,4 +36,4 @@ body:
     id: version
     attributes:
       label: Ensemble version
-      placeholder: "1.1.0"
+      placeholder: "1.1.1"

@@ -28,7 +28,7 @@ struct EnsembleApp: App {
 struct WelcomeView: View {
     @Bindable var ensemble: Ensemble
     @Environment(\.dismissWindow) private var dismissWindow
-    @Environment(\.openWindow) private var openWindow
+    @State private var window: NSWindow?
 
     var body: some View {
         let guide = ensemble.guide
@@ -90,8 +90,11 @@ struct WelcomeView: View {
         .padding(24)
         .frame(width: 440)
         .onAppear { NSApp.activate() }
-        // macOS's own prompts (password, microphone, local network) take the focus: come back after each step.
-        .onChange(of: guide) { NSApp.activate(); openWindow(id: "welcome") }
+        // macOS's own prompts (password, local network) take the focus, and when they close macOS gives it to
+        // the last app with a Dock icon and refuses a menu bar app's request for it: put the guide back on
+        // top after each step without the focus.
+        .background(WindowReader { window = $0 })
+        .onChange(of: guide) { window?.orderFrontRegardless() }
         .onDisappear { UserDefaults.standard.set(true, forKey: "welcomed") }
     }
 
@@ -192,3 +195,15 @@ struct EnsembleMenu: View {
     }
 }
 
+/// Gives the window its view is in, once it is in one.
+private struct WindowReader: NSViewRepresentable {
+    let found: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { if let window = view.window { found(window) } }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+}
