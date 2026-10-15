@@ -23,12 +23,6 @@ enum CA {
         AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: element)
     }
 
-    static func has(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector,
-                    _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> Bool {
-        var addr = address(selector, scope)
-        return AudioObjectHasProperty(id, &addr)
-    }
-
     static func scalar<T: BitwiseCopyable>(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector,
                                            _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
                                            _ element: AudioObjectPropertyElement = kAudioObjectPropertyElementMain,

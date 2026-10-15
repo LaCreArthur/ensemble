@@ -2,11 +2,6 @@ import CryptoKit
 import Foundation
 import Synchronization
 
-public struct LinkError: Error, CustomStringConvertible {
-    public let description: String
-    init(_ description: String) { self.description = description }
-}
-
 /// ChaCha20-Poly1305 with 96-bit nonces made of 4 zero bytes and a 64-bit little-endian counter.
 enum Seal {
     static func nonce(_ counter: UInt64) -> ChaChaPoly.Nonce {

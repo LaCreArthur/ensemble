@@ -7,8 +7,6 @@ public struct SystemVolume: Sendable {
 
     public init(device: AudioObjectID) { self.device = device }
 
-    public var isAvailable: Bool { CA.has(device, kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput) }
-
     /// Slider position, 0...1.
     public var position: Float {
         get { (try? CA.scalar(device, kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput, as: Float32.self)) ?? 1 }

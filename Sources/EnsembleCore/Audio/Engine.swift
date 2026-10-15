@@ -195,8 +195,6 @@ public final class Engine: @unchecked Sendable {
     /// Adds a calibration click to the captured sound at capture frame `frame`, after the main gain,
     /// so it is heard even while the main gain is 0. One click at a time; `frame` must be in the future.
     public func injectClick(atFrame frame: Int) { pendingClick.store(frame, ordering: .releasing) }
-    public var clickLength: Int { click.count }
-
 
     // MARK: IO thread
 

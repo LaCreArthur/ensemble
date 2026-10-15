@@ -31,7 +31,7 @@ Use the [bug report](../../issues/new?template=bug_report.yml). The app's log he
    ```
 
 3. Measure what you changed. `swift run ensemble-lab` holds the tools used to tune the sync (delay of each
-   output, capture path, first frame after silence). Put the numbers before and after in the pull request.
+   output, capture path, playback start). Put the numbers before and after in the pull request.
 4. Match the code around you: plain Swift, no new dependencies, comments that say why.
 
 Ideas that need a hand are labeled [help wanted](../../labels/help%20wanted).
