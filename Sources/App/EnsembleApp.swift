@@ -43,7 +43,7 @@ struct WelcomeView: View {
             }
             step(1, done: guide.device, "Add Ensemble's sound device") {
                 Text("Your apps play to Ensemble's sound device while you share, and video players hold the picture back to match the sound. macOS asks for your password, and the sound stops for a second.")
-                Button("Install Sound Device…") { ensemble.installDevice() }
+                InstallDeviceButton(ensemble: ensemble)
             }
             step(2, done: guide.sharing, keepDetail: true, "Play on all your speakers") {
                 if !guide.device {
@@ -54,25 +54,21 @@ struct WelcomeView: View {
                 } else {
                     Text("Tick the speakers to play on. You can change them later in the menu bar.")
                     ForEach(ensemble.outputs) { output in
-                        Toggle(output.name, isOn: Binding(
-                            get: { ensemble.chosenOutputs.contains(output.uid) },
-                            set: { ensemble.chosenOutputs.formSymmetricDifference([output.uid]); _ = $0 }))
+                        Toggle(output.name, isOn: ensemble.chosen(output.uid))
                     }
                 }
             }
             step(3, done: guide.paired, "Add your other Mac (optional)") {
                 if guide.denied {
                     Text("macOS does not let Ensemble look for your other Mac. Allow it in Local Network settings.")
-                    Button("Open Local Network Settings") { Ensemble.openLocalNetworkSettings() }
+                    LocalNetworkSettingsButton()
                 } else if !guide.looking {
                     Text("Install Ensemble on your other Mac too, and click Find on both Macs. When macOS asks, allow Ensemble to find devices on your local network: this is how your Macs find each other.")
-                    Button("Find My Other Mac") { ensemble.findOtherMac() }
+                    FindOtherMacButton(ensemble: ensemble)
                 } else if ensemble.link.pairable.isEmpty {
                     Text("Looking for your other Mac. Open Ensemble there and click Find My Other Mac.")
                 } else {
-                    ForEach(ensemble.link.pairable, id: \.id) { peer in
-                        Button("Pair with \(peer.name)…") { ensemble.pair(with: peer) }
-                    }
+                    PairButtons(ensemble: ensemble)
                     Text("Both Macs then show a code. Click Pair on each Mac if the codes are the same. The sound goes only to the Mac you pair.")
                 }
                 if let note = ensemble.link.note { Text(note).foregroundStyle(.secondary) }
@@ -130,7 +126,7 @@ struct EnsembleMenu: View {
             if ensemble.isOn && !ensemble.guide.device {
                 Text("Ensemble shares this Mac's sound through its own sound device.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Button("Install Sound Device…") { ensemble.installDevice() }
+                InstallDeviceButton(ensemble: ensemble)
             }
             if ensemble.isReceiving {
                 HStack(spacing: 22) {
@@ -148,9 +144,7 @@ struct EnsembleMenu: View {
 
             Text("This Mac").font(.subheadline.bold())
             ForEach(ensemble.outputs) { output in
-                Toggle(output.name, isOn: Binding(
-                    get: { ensemble.chosenOutputs.contains(output.uid) },
-                    set: { ensemble.chosenOutputs.formSymmetricDifference([output.uid]); _ = $0 }))
+                Toggle(output.name, isOn: ensemble.chosen(output.uid))
                 volumeRow(nil, value: volume(output.uid))
             }
 
@@ -158,13 +152,11 @@ struct EnsembleMenu: View {
             if !ensemble.otherMacStatus.isEmpty {
                 Text(ensemble.otherMacStatus).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            ForEach(ensemble.link.pairable, id: \.id) { peer in
-                Button("Pair with \(peer.name)…") { ensemble.pair(with: peer) }
-            }
+            PairButtons(ensemble: ensemble)
             if ensemble.guide.denied {
-                Button("Open Local Network Settings") { Ensemble.openLocalNetworkSettings() }
+                LocalNetworkSettingsButton()
             } else if !ensemble.guide.looking {
-                Button("Find My Other Mac") { ensemble.findOtherMac() }
+                FindOtherMacButton(ensemble: ensemble)
             }
 
             Divider()
@@ -193,6 +185,39 @@ struct EnsembleMenu: View {
         }
         .labelsHidden()
     }
+}
+
+extension Ensemble {
+    /// Whether output `uid` is ticked, as a switch.
+    func chosen(_ uid: String) -> Binding<Bool> {
+        Binding(get: { self.chosenOutputs.contains(uid) },
+                set: { if $0 { self.chosenOutputs.insert(uid) } else { self.chosenOutputs.remove(uid) } })
+    }
+}
+
+/// One button per Mac running Ensemble nearby that can be paired.
+private struct PairButtons: View {
+    let ensemble: Ensemble
+
+    var body: some View {
+        ForEach(ensemble.link.pairable, id: \.id) { peer in
+            Button("Pair with \(peer.name)…") { ensemble.pair(with: peer) }
+        }
+    }
+}
+
+private struct FindOtherMacButton: View {
+    let ensemble: Ensemble
+    var body: some View { Button("Find My Other Mac") { ensemble.findOtherMac() } }
+}
+
+private struct InstallDeviceButton: View {
+    let ensemble: Ensemble
+    var body: some View { Button("Install Sound Device…") { ensemble.installDevice() } }
+}
+
+private struct LocalNetworkSettingsButton: View {
+    var body: some View { Button("Open Local Network Settings") { Ensemble.openLocalNetworkSettings() } }
 }
 
 /// Gives the window its view is in, once it is in one.

@@ -76,6 +76,8 @@ final class Ensemble {
     var mainVolume: Double = 1 { didSet { if abs(Double(volumeControl?.position ?? 1) - mainVolume) > 0.001 { volumeControl?.position = Float(mainVolume) } } }
     /// What the other Mac last said about itself; nil without a session.
     private(set) var peer: PeerState?
+    /// What this Mac does, as the last update derived it.
+    private(set) var role = Role.off
     /// True while this Mac plays the other Mac's sound.
     var isReceiving: Bool { if case .stream = running?.input { true } else { false } }
 
@@ -145,7 +147,7 @@ final class Ensemble {
     private var remoteCommands: [(MPRemoteCommand, Any)] = []
     /// The volume both Macs last agreed on while this Mac plays the other's sound.
     private var sharedVolume: (volume: Double, muted: Bool)?
-    private let log = Logger(subsystem: "com.lacrearthur.ensemble", category: "audio")
+    private let log = Logger.ensemble("audio")
     /// Logs the stream's health while this Mac plays the other Mac's sound.
     private var healthTimer: Timer?
     /// Ends the pause of this Mac's music if the other Mac's tune never says it is done.
@@ -263,9 +265,15 @@ final class Ensemble {
         outputs = OutputDevice.all()
         let session = link.session
         let peer = session == nil ? nil : self.peer
-        if isOn, let peer, let session, peer.on, (peer.since, session.peer.id) > (since, link.me.id) {
+        if isOn, let peer, let session, peer.on, Role.yields(since: since, id: link.me.id, to: peer.since, session.peer.id) {
             isOn = false   // the other Mac was switched on later; this runs update() again
             return
+        }
+        let headphones = self.headphones
+        let role = Role(on: isOn, headphones: headphones != nil, peerOn: peer?.on == true, peerStream: peer?.stream ?? "")
+        if role != self.role {
+            log.notice("role: \(self.role, privacy: .public) -> \(role, privacy: .public)")
+            self.role = role
         }
         let main = outputs.first(where: \.isBuiltIn) ?? outputs.first
         // The built-in speakers always drive the timing, silent if not ticked.
@@ -273,13 +281,12 @@ final class Ensemble {
         let localLead = main.flatMap { main in devices.map { Engine.lead(of: $0, lag: lag($0), main: main) }.max() } ?? 0
         let delay = link.pairing != nil ? max(localLead, Self.networkDelay + peerLead) : localLead
         let system = OutputDevice.defaultOutput()
-        let headphones = self.headphones
         let sharing = isOn && !devices.isEmpty
         let needsInstall = EnsembleDevice.needsInstall
         if !sharing, EnsembleDevice.isSystemOutput, let main { try? OutputDevice.setDefaultOutput(main) }   // before the device goes
         EnsembleDevice.setLatency(sharing ? delay + (main.map { Engine.capturePath(main: $0) + $0.outputLatency } ?? 0) + trim : nil)
         let device = EnsembleDevice.id
-        if headphones == nil, isOn || peer?.on == true {
+        if role != .off, role != .standby {
             if sharing, device != nil {
                 if !EnsembleDevice.isSystemOutput { EnsembleDevice.makeSystemOutput() }
             } else if let system, let main, system.isBluetooth, system != main {
@@ -291,12 +298,16 @@ final class Ensemble {
         mainVolume = Double(volumeControl?.position ?? 1)
         let wanted = monitor.isPlaying || hold != nil || isTuning
         var desired: Config?
-        if !devices.isEmpty, headphones == nil {
-            if isOn, device != nil {
+        if !devices.isEmpty {
+            switch role {
+            case .sharing where device != nil:
                 desired = Config(outputs: devices.map(\.uid), delay: delay, input: .capture)
-            } else if !isOn, let peer, let session, peer.on, !peer.stream.isEmpty {
-                let input = Input.stream(name: peer.stream, session: ObjectIdentifier(session.crypto))
-                desired = Config(outputs: devices.map(\.uid), delay: localLead, input: input)
+            case .receiving(let stream) where !stream.isEmpty:
+                if let session {
+                    desired = Config(outputs: devices.map(\.uid), delay: localLead, input: .stream(name: stream, session: ObjectIdentifier(session.crypto)))
+                }
+            default:
+                break
             }
         }
         let playing = desired != nil && (desired?.input != .capture || wanted)
@@ -315,20 +326,23 @@ final class Ensemble {
         let peerName = session?.peer.name ?? link.pairing?.peer.name ?? "the other Mac"
         let names = ListFormatter.localizedString(byJoining: outputs.filter { chosenOutputs.contains($0.uid) }.map(\.name)
             + (peer?.canPlay == true ? [peerName] : []))
-        if isReceiving {
-            status = "Playing the sound of \(peerName)"
-        } else if let headphones, isOn || peer?.on == true {
-            status = "Standby: \(headphones.name) counts as headphones. Tick it to use it as a speaker"
-        } else if !isOn {
+        switch role {
+        case .off:
             status = "Off"
-        } else if names.isEmpty {
-            status = "Playing nowhere: tick an output"
-        } else if engine == nil {
-            status = needsInstall ? "Install the sound device to share" : "Cannot capture the sound"
-        } else if !wanted {
-            status = "Ready for sound on " + names
-        } else {
-            status = isTuning ? "Tuning: listening to each output…" : "Playing on " + names
+        case .standby:
+            status = "Standby: \(headphones?.name ?? "the output") counts as headphones. Tick it to use it as a speaker"
+        case .receiving:
+            status = (isReceiving ? "Playing the sound of " : "Ready for the sound of ") + peerName
+        case .sharing:
+            if names.isEmpty {
+                status = "Playing nowhere: tick an output"
+            } else if engine == nil {
+                status = needsInstall ? "Install the sound device to share" : "Cannot capture the sound"
+            } else if !wanted {
+                status = "Ready for sound on " + names
+            } else {
+                status = isTuning ? "Tuning: listening to each output…" : "Playing on " + names
+            }
         }
         otherMacStatus = otherMacText(peer: peer, session: session)
         guide = Guide(denied: link.denied, paired: link.pairing != nil, sharing: isOn && engine != nil,
@@ -523,7 +537,7 @@ final class Ensemble {
             } : nil
             if isOn { engine?.mainGain.value = on ? 0 : 1 }
         case "click":
-            if isOn, let engine { engine.injectClick(atFrame: engine.ring.writeIndex + Int(0.05 * engine.sampleRate)) }
+            if isOn { engine?.injectClick() }
         case "trim":
             guard let value = message["value"] as? Double else { break }
             trim = max(0, min(0.5, value))
@@ -655,9 +669,7 @@ final class Ensemble {
         guard let name = link.session?.peer.name else { return nil }
         if let sender, peer?.canPlay == true {
             // This Mac shares: its clicks reach the other Mac through the stream.
-            return Calibration.OtherMac(name: name, solo: { sender.gain.value = $0 ? 1 : 0 }) {
-                engine.injectClick(atFrame: engine.ring.writeIndex + Int(0.05 * engine.sampleRate))
-            }
+            return Calibration.OtherMac(name: name, solo: { sender.gain.value = $0 ? 1 : 0 }) { engine.injectClick() }
         }
         guard isReceiving else { return nil }
         // The other Mac shares: it clicks when asked, and its clicks come here in its stream.

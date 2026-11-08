@@ -99,3 +99,7 @@ Sources/EnsembleCore/Audio/Playhead.swift	position = target\n            integra
 Sources/EnsembleCore/Link/Wire.swift	guard packet.count >= 9 + 16 else { return nil }	guard packet.count >= 1 else { return nil }
 Sources/EnsembleCore/Link/Wire.swift	HKDF<SHA256>.deriveKey(inputKeyMaterial: secret, salt: salt, info: Data(info.utf8), outputByteCount: 32)	HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: Data(repeating: 0, count: 32)), salt: salt, info: Data(info.utf8), outputByteCount: 32)
 Sources/EnsembleCore/Link/Stream.swift	let gain = reader.float(), let rate = reader.float() else { return }	let gain = reader.float() else { return }\n        let rate = reader.float() ?? Float(48_000)
+Sources/EnsembleCore/Control/Role.swift	        self = if headphones && (on || peerOn) { .standby }	        self = if headphones { .standby }
+Sources/EnsembleCore/Control/Role.swift	        self = if headphones && (on || peerOn) { .standby }	        self = if headphones && on { .standby }
+Sources/EnsembleCore/Control/Role.swift	            else if on { .sharing }	            else if on && !peerOn { .sharing }
+Sources/EnsembleCore/Control/Role.swift	        (peerSince, peerID) > (since, id)	        peerSince > since

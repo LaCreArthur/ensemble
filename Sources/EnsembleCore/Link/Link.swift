@@ -51,7 +51,16 @@ public final class Link {
     public private(set) var nearby: [Peer] = []
     public private(set) var session: Session?
     /// What the pairing or the connection does now, for the menu (nil: nothing to say).
-    public private(set) var note: String?
+    public var note: String? {
+        if let channel = channels.first(where: { $0.exchange != nil }), let peer = channel.peer {
+            return channel.exchange?.code.map { "Pairing with \(peer.name): code \($0)" } ?? "Pairing with \(peer.name)…"
+        }
+        if let cancelledOn { return "Pairing cancelled on \(cancelledOn)." }
+        if refused { return "\(pairing?.peer.name ?? "The other Mac") does not know this Mac any more: pair again." }
+        return nil
+    }
+    /// The Mac whose user cancelled the last pairing, until a pairing or a session starts.
+    private var cancelledOn: String?
     /// The paired Mac answered that it does not know this one: it needs a new pairing.
     public private(set) var refused = false
     /// The user did not allow this app on the local network (Privacy & Security), so it finds no Mac.
@@ -82,7 +91,7 @@ public final class Link {
     private var direct = false
     /// Since when this Mac looks for the other one (start, wake, end of a session).
     private var lookingSince = Date()
-    private let log = Logger(subsystem: "com.lacrearthur.ensemble", category: "link")
+    private let log = Logger.ensemble("link")
 
     public init(me: Peer, pairing: Pairing?) {
         self.me = me
@@ -112,11 +121,11 @@ public final class Link {
     /// Starts pairing with a Mac running Ensemble found on the network; both Macs then ask their user to confirm.
     public func pair(with peer: Peer) {
         guard let endpoint = endpoints[peer.id], !channels.contains(where: { $0.exchange != nil }) else { return }
-        let channel = Channel(NWConnection(to: endpoint, using: Self.parameters(direct: direct)), initiator: true)
-        channel.peer = peer
-        channel.exchange = Exchange()
-        note = "Pairing with \(peer.name)…"
-        add(channel)
+        connect(to: endpoint) {
+            $0.peer = peer
+            $0.exchange = Exchange()
+        }
+        cancelledOn = nil
         onChange()
     }
 
@@ -215,8 +224,13 @@ public final class Link {
         updateDirect()
         guard let peer = pairing?.peer, !refused, session == nil, me.id < peer.id,
               !channels.contains(where: { $0.initiator || $0.authenticated }), let endpoint = endpoints[peer.id] else { return }
+        connect(to: endpoint) { $0.direct = self.direct }
+    }
+
+    /// Opens a channel to `endpoint`, set up by `prepare` before it starts.
+    private func connect(to endpoint: NWEndpoint, _ prepare: (Channel) -> Void) {
         let channel = Channel(NWConnection(to: endpoint, using: Self.parameters(direct: direct)), initiator: true)
-        channel.direct = direct
+        prepare(channel)
         add(channel)
     }
 
@@ -234,7 +248,7 @@ public final class Link {
 
     private func closed(_ channel: Channel) {
         channels.removeAll { $0 === channel }
-        if channel.exchange != nil, note?.hasPrefix("Pairing") == true { note = nil }
+        if channel.exchange != nil { onChange() }   // the pairing's note goes
         if channel === sessionChannel || session != nil && sessionChannel == nil {
             log.notice("session ended")
             session = nil
@@ -253,8 +267,7 @@ public final class Link {
         if let exchange = channel.exchange {
             channel.send(["t": "pair", "id": me.id, "name": me.name, "pk": base64(exchange.publicKey)])
         } else {
-            channel.nonce = randomBytes(16)
-            channel.send(["t": "hello", "id": me.id, "name": me.name, "n": base64(channel.nonce), "d": channel.direct])
+            sendHello(channel)
         }
     }
 
@@ -271,7 +284,7 @@ public final class Link {
             sessionChannel = channel
             session = Session(peer: peer, crypto: crypto)
             refused = false
-            if note != nil, channel.exchange == nil { note = nil }
+            cancelledOn = nil
             let path = channel.connection.currentPath?.availableInterfaces.map(\.name).joined(separator: ",") ?? "?"
             log.notice("session with \(peer.name, privacy: .public) over \(channel.direct ? "the direct link" : "the network", privacy: .public) (\(path, privacy: .public))")
             updateDirect()
@@ -279,7 +292,6 @@ public final class Link {
         case "unpaired":
             guard channel.initiator, channel.exchange == nil else { return channel.close() }
             refused = true
-            note = "\(pairing?.peer.name ?? "The other Mac") does not know this Mac any more: pair again."
             channel.close()
             onChange()
         default: pairStep(channel, type, message)
@@ -299,8 +311,7 @@ public final class Link {
             salt = channel.nonce + theirs
         } else {
             channel.direct = direct
-            channel.nonce = randomBytes(16)
-            channel.send(["t": "hello", "id": me.id, "name": me.name, "n": base64(channel.nonce), "d": direct])
+            sendHello(channel)
             salt = theirs + channel.nonce
         }
         // A session counts as direct only if both Macs were looking over the direct link when it started.
@@ -313,6 +324,12 @@ public final class Link {
         channel.send(["t": "ready"])
     }
 
+    /// Opens a session on `channel`: a fresh nonce, and whether this Mac looks over the direct link.
+    private func sendHello(_ channel: Channel) {
+        channel.nonce = randomBytes(16)
+        channel.send(["t": "hello", "id": me.id, "name": me.name, "n": base64(channel.nonce), "d": channel.direct])
+    }
+
     /// One pairing in progress on a channel.
     fileprivate final class Exchange {
         let key = Curve25519.KeyAgreement.PrivateKey()
@@ -321,6 +338,8 @@ public final class Link {
         var theirNonce: [UInt8] = []
         var commitment: [UInt8] = []
         var secret: SymmetricKey?
+        /// The code both users compare, once both nonces are known.
+        var code: String?
         var confirmedHere = false, confirmedThere = false
         var publicKey: [UInt8] { [UInt8](key.publicKey.rawRepresentation) }
     }
@@ -337,7 +356,7 @@ public final class Link {
             x.commitment = sha256(x.publicKey + key + x.nonce)
             channel.exchange = x
             channel.peer = Peer(id: id, name: name)
-            note = "Pairing with \(name)…"
+            cancelledOn = nil
             channel.send(["t": "pair1", "pk": base64(x.publicKey), "c": base64(x.commitment)])
             onChange()
         case ("pair1", true):
@@ -362,9 +381,8 @@ public final class Link {
             x.confirmedThere = true
             finishPairing(channel)
         case ("pairNo", _):
-            note = "Pairing cancelled on \(channel.peer?.name ?? "the other Mac")."
+            cancelledOn = channel.peer?.name ?? "the other Mac"
             channel.close()
-            onChange()
         default:
             channel.close()
         }
@@ -381,7 +399,7 @@ public final class Link {
         let digest = sha256(keyI + keyR + nonceI + nonceR)
         let number = digest.prefix(4).reduce(UInt32(0)) { $0 << 8 | UInt32($1) } % 1_000_000
         let code = String(format: "%03d %03d", number / 1000, number % 1000)
-        note = "Pairing with \(peer.name): code \(code)"
+        x.code = code
         onChange()
         confirm(peer, code) { [weak self, weak channel] yes in
             guard let self, let channel, let x = channel.exchange, let secret = x.secret else { return }
@@ -400,7 +418,6 @@ public final class Link {
         let pairing = Pairing(peer: peer, key: secret)
         self.pairing = pairing
         refused = false
-        note = nil
         onPaired(pairing)
         // The session starts on a new connection, with the new secret.
         sessionChannel?.close()

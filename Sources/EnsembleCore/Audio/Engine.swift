@@ -212,9 +212,14 @@ public final class Engine: @unchecked Sendable {
         anchor.load().map { $0.time + Double(frame - $0.frame) / sampleRate }
     }
 
-    /// Adds a calibration click to the captured sound at capture frame `frame`, after the main gain,
-    /// so it is heard even while the main gain is 0. One click at a time; `frame` must be in the future.
-    public func injectClick(atFrame frame: Int) { pendingClick.store(frame, ordering: .releasing) }
+    /// Adds a calibration click to the captured sound 50 ms ahead of the newest frame, after the main
+    /// gain, so it is heard even while the main gain is 0. One click at a time; returns its frame.
+    @discardableResult
+    public func injectClick() -> Int {
+        let frame = ring.writeIndex + Int(0.05 * sampleRate)
+        pendingClick.store(frame, ordering: .releasing)
+        return frame
+    }
 
     // MARK: IO thread
 

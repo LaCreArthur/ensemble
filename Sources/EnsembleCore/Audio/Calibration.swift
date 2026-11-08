@@ -57,8 +57,7 @@ public enum Calibration {
                     let gain = o == 0 && savedGains[0] == 0 ? 1 : savedGains[o]
                     for (i, output) in engine.outputs.enumerated() { output.gain.value = i == o ? gain : 0 }
                     for _ in 0..<clicks {
-                        let frame = engine.ring.writeIndex + Int(0.05 * rate)
-                        engine.injectClick(atFrame: frame)
+                        let frame = engine.injectClick()
                         if let heard = engine.heardTime(ofFrame: frame) { references[o].append(heard) }
                         Thread.sleep(forTimeInterval: spacing)
                     }
