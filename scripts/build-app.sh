@@ -5,12 +5,14 @@
 set -e
 cd "$(dirname "$0")/.."
 identity="${ENSEMBLE_IDENTITY:-Apple Development: Arthur Scheidel (H7455J5457)}"
-swift build -c release --product Ensemble --arch arm64 --arch x86_64
+build="swift build -c release --product Ensemble --arch arm64 --arch x86_64"
+$build
 ENSEMBLE_IDENTITY="$identity" scripts/build-driver.sh
 app=build/Ensemble.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp .build/apple/Products/Release/Ensemble "$app/Contents/MacOS/Ensemble"
+# Ask for the path: an Xcode update moved it once, and the old copy stayed and was installed.
+cp "$($build --show-bin-path)/Ensemble" "$app/Contents/MacOS/Ensemble"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 cp Resources/AppIcon.icns "$app/Contents/Resources/"
 cp -R build/EnsembleDevice.driver "$app/Contents/Resources/"
